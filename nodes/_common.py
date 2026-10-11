@@ -31,33 +31,29 @@ from ..utility.pyiqa_utils import (
     list_pyiqa_checkpoints,
     make_room_for_metric,
     reference_tooltip,
-    release_metric,
     revive_metric,
 )
 
 
-# Memory handling for the metric after scoring. Three modes, one law each:
+# Memory handling for the metric after scoring. Two modes, one law each:
 MEMORY_KEEP = "keep loaded"
-MEMORY_PARK = "free VRAM (park in RAM)"
-MEMORY_DROP = "free VRAM + RAM (fully unload)"
+MEMORY_DROP = "unload model (VRAM + RAM)"
 
 MEMORY_MANAGEMENT_INPUT = (
-    [MEMORY_PARK, MEMORY_DROP, MEMORY_KEEP],
+    [MEMORY_DROP, MEMORY_KEEP],
     {
-        "default": MEMORY_PARK,
+        "default": MEMORY_DROP,
         "tooltip": (
             "What happens to this metric after it scores. "
-            "'free VRAM (park in RAM)': hands the VRAM back and keeps the "
-            "model warm in system RAM - ~2s to restore on the next score. "
-            "'free VRAM + RAM (fully unload)': the metric is gone from VRAM "
-            "AND RAM (only the file on disk remains) - the next score "
-            "reloads it (seconds for small models, ~30s for Q-ReAlign Pro). "
+            "'unload model (VRAM + RAM)': the metric is fully unloaded - "
+            "gone from VRAM and RAM, only the file on disk remains; the next "
+            "score reloads it (seconds for small models, ~30s for Q-ReAlign "
+            "Pro). Re-queueing just works: a previously-unloaded model handed "
+            "back by ComfyUI's output cache is rebuilt transparently. "
             "'keep loaded': stays on the GPU, fastest to re-score, holds its "
-            "VRAM between runs. int8_convrot models can never be parked in "
-            "RAM (CPU residency silently corrupts their scores), so the park "
-            "mode fully unloads them instead. With several score nodes "
-            "sharing one loader, only free on the LAST one - earlier nodes "
-            "should 'keep loaded' or you pay a reload between them."
+            "VRAM between runs. With several score nodes sharing one loader, "
+            "unload only on the LAST one - earlier nodes should 'keep loaded' "
+            "or you pay a reload between them."
         ),
     },
 )
@@ -69,7 +65,7 @@ def with_memory_management(fn):
     A decorator (rather than an edit inside every score body) so the behavior
     is uniform across all score nodes. Before the score: a fully-unloaded
     (gutted) model handed over by ComfyUI's output cache is revived through
-    its cached recipe. After the score: park, drop, or nothing, per the mode.
+    its cached recipe. After the score: unload or nothing, per the mode.
     """
 
     @functools.wraps(fn)
@@ -83,14 +79,11 @@ def with_memory_management(fn):
                 bound.arguments["model"] = revived
         result = fn(*bound.args, **bound.kwargs)
         mode = bound.arguments.get("memory_management") or extra.get(
-            "memory_management", MEMORY_PARK
+            "memory_management", MEMORY_DROP
         )
         acted = bound.arguments.get("model") or model
-        if acted is not None and getattr(acted, "_pyiqa_gutted", False) is False:
-            if mode == MEMORY_DROP:
-                drop_metric(acted)
-            elif mode != MEMORY_KEEP:
-                release_metric(acted)
+        if acted is not None and mode != MEMORY_KEEP:
+            drop_metric(acted)
         return result
 
     return wrapper
@@ -266,9 +259,12 @@ class FamilyLoaderBase:
                 },
             )
         }
-        if cls.CUSTOM_PATTERNS:
+        # the custom combos appear ONLY when custom checkpoints actually exist
+        # on disk - a loader with no customs shows just its variant combo
+        customs = cls._custom_options() if cls.CUSTOM_PATTERNS else []
+        if customs:
             required["custom_checkpoint"] = (
-                ["(none)"] + [label for label, _ in cls._custom_options()],
+                ["(none)"] + [label for label, _ in customs],
                 {
                     "default": "(none)",
                     "tooltip": (

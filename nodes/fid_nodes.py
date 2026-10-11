@@ -25,10 +25,7 @@ from PIL import Image
 from ._common import (
     with_memory_management,
     MEMORY_MANAGEMENT_INPUT,
-    LAZY_MODEL_OPT,
     FamilyLoaderBase,
-    LazyScoreMixin,
-    lazy_image_opt,
 )
 
 MIN_IMAGES_PER_SIDE = 2
@@ -59,8 +56,14 @@ class FIDLoader(FamilyLoaderBase):
     )
 
 
-class FIDScore(LazyScoreMixin):
-    """Set-level FID / sFID between two IMAGE batches. LOWER is better."""
+class FIDScore:
+    """Set-level FID / sFID between two image sets. LOWER is better.
+
+    ``target`` and ``reference`` are INPUT_IS_LIST: each accepts MULTIPLE
+    image wires (every batch is concatenated into one set), so several
+    sources can feed one node. Not lazy - InceptionV3 is small and loads in
+    seconds, and INPUT_IS_LIST batching does not compose with lazy inputs.
+    """
 
     CATEGORY = "pyiqa/FID"
     DESCRIPTION = (
@@ -69,30 +72,39 @@ class FIDScore(LazyScoreMixin):
         "temporary PNGs and scored through pyiqa's own folder-based FID. The "
         "model is loaded lazily, after the image exists."
     )
-    LAZY_INPUTS = ("target", "reference", "model")
+    # target and reference accept multiple wires; every batch is concatenated
+    INPUT_IS_LIST = (False, False, True, True, False)
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "memory_management": MEMORY_MANAGEMENT_INPUT,
-                "model": ("PYIQA_FID", dict(LAZY_MODEL_OPT)),
+                "model": (
+                    "PYIQA_FID",
+                    {"tooltip": "From the FID Loader node."},
+                ),
                 "target": (
                     "IMAGE",
-                    lazy_image_opt(
-                        "Target image set (the generated/distorted side). Needs "
-                        "several images - the Fréchet distance compares feature "
-                        "mean and covariance, so a handful (>= ~16) is the "
-                        "minimum for a meaningful number."
-                    ),
+                    {
+                        "tooltip": (
+                            "Target image set (the generated/distorted side). "
+                            "Accepts MULTIPLE image wires - every wired batch "
+                            "joins one set. The Fréchet distance compares a "
+                            "feature mean and covariance, so a handful of images "
+                            "(>= ~16) is the minimum for a meaningful number."
+                        )
+                    },
                 ),
                 "reference": (
                     "IMAGE",
-                    lazy_image_opt(
-                        "Reference image set (real/ground-truth side). Same size "
-                        "guidance as target; the two sets need not have equal "
-                        "counts, but both must have >= 2 images."
-                    ),
+                    {
+                        "tooltip": (
+                            "Reference image set (real/ground-truth side). "
+                            "Accepts MULTIPLE image wires; the two sets need not "
+                            "have equal counts, but each needs >= 2 images."
+                        )
+                    },
                 ),
                 "resize_mode": (
                     ["clean", "legacy_pytorch", "legacy_tensorflow"],
@@ -122,18 +134,26 @@ class FIDScore(LazyScoreMixin):
 
     @with_memory_management
     def score(self, model=None, target=None, reference=None, resize_mode="clean", **kwargs):
-        if self._skipped(model, target, reference):
+        if model is None or not target or not reference:
             return ([],)
-        for name, batch in (("target", target), ("reference", reference)):
-            if batch.shape[0] < MIN_IMAGES_PER_SIDE:
+        # INPUT_IS_LIST: target/reference arrive as lists of IMAGE batches
+        target = [t for t in target if t is not None]
+        reference = [r for r in reference if r is not None]
+        for name, batches in (("target", target), ("reference", reference)):
+            n = sum(b.shape[0] for b in batches)
+            if n < MIN_IMAGES_PER_SIDE:
                 raise ValueError(
-                    f"{name} has {batch.shape[0]} image(s); FID needs at least "
-                    f"{MIN_IMAGES_PER_SIDE} per side (and >= ~16 to be meaningful)."
+                    f"{name} has {n} image(s) across {len(batches)} wire(s); FID "
+                    f"needs at least {MIN_IMAGES_PER_SIDE} per side (and >= ~16 "
+                    "to be meaningful) - wire more images or a bigger batch."
                 )
         with tempfile.TemporaryDirectory(prefix="pyiqa_fid_target_") as dir_t:
             with tempfile.TemporaryDirectory(prefix="pyiqa_fid_reference_") as dir_r:
-                _write_batch(target, dir_t)
-                _write_batch(reference, dir_r)
+                n_t = n_r = 0
+                for batch in target:
+                    n_t = _write_batch(batch, dir_t, n_t)
+                for batch in reference:
+                    n_r = _write_batch(batch, dir_r, n_r)
                 # pyiqa's own folder API, with a single-process loader so nothing
                 # spawns worker processes inside ComfyUI. Note: InferenceModel
                 # injects device= itself for fid metrics, so we must not pass it.
@@ -148,8 +168,13 @@ class FIDScore(LazyScoreMixin):
         return (float(out),)
 
 
-def _write_batch(images, folder):
-    """Write a ComfyUI BHWC [0,1] batch as 8-bit PNGs (one file per image)."""
+def _write_batch(images, folder, start=0):
+    """Write a ComfyUI BHWC [0,1] batch as 8-bit PNGs; returns the next index.
+
+    ``start`` continues the numbering so several wired batches share one
+    folder without overwriting each other's files.
+    """
     arr = (images.clamp(0, 1).cpu().numpy() * 255.0).round().astype(np.uint8)
     for i in range(arr.shape[0]):
-        Image.fromarray(arr[i]).save(os.path.join(folder, f"{i:05d}.png"))
+        Image.fromarray(arr[i]).save(os.path.join(folder, f"{start + i:05d}.png"))
+    return start + arr.shape[0]

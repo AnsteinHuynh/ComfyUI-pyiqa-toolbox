@@ -66,8 +66,8 @@ s1 = score(m, image)
 v_loaded = vram()
 print(f"loaded:  VRAM alloc {v_loaded:.2f} GiB, scores {s1}")
 
-# park mode on an int8 metric -> must collapse to full unload
-released = pyiqa_utils.release_metric(m)
+# the unload mode on an int8 metric -> full drop
+released = pyiqa_utils.drop_metric(m)
 gutted = getattr(m, "_pyiqa_gutted", False)
 v_after = vram()
 print(f"park:    release_metric={released}, gutted={gutted}, "

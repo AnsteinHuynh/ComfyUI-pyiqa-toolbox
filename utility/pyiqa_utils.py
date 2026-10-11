@@ -2,7 +2,6 @@
 conversion, score formatting, and a small metric cache so loader nodes reuse one
 loaded model across score nodes and re-queues instead of duplicating VRAM."""
 
-import dataclasses
 import gc
 import glob
 import json
@@ -327,13 +326,18 @@ def get_cached_metric(family, key, factory):
         if not getattr(hit[1], "_pyiqa_gutted", False):
             return hit[1]
         del _METRIC_CACHE[entry]
-    stale = [k for k, (f, _, _) in _METRIC_CACHE.items() if f == family and k != entry]
+    # switch to another variant of the same family: gut the outgoing live
+    # metric (its memory frees) but KEEP its entry as a tombstone - ComfyUI's
+    # output cache may still hand the old object to a score node later, and
+    # the tombstone is what lets that reference revive. Tombstones are empty
+    # shells, so a family may accumulate several at no cost.
+    stale = [
+        k
+        for k, (f, m, _) in _METRIC_CACHE.items()
+        if f == family and k != entry and not getattr(m, "_pyiqa_gutted", False)
+    ]
     for k in stale:
-        # park the outgoing metric before dropping it: ComfyUI's node output
-        # cache may still hold a reference, so a bare del would leave it on
-        # the GPU (release_metric itself collapses to a full drop for int8)
-        release_metric(_METRIC_CACHE[k][1])
-        del _METRIC_CACHE[k]
+        drop_metric(_METRIC_CACHE[k][1])
     if stale and torch.cuda.is_available():
         torch.cuda.empty_cache()
     metric = factory()
@@ -346,10 +350,26 @@ def revive_metric(model):
 
     ComfyUI caches node outputs between prompts, so a score node can be handed
     the loader's previous output - a hollow shell after a full unload. The
-    decorator revives through this before scoring.
+    gutted shell carries its (family, key) recipe, so it finds the cache entry
+    even after other revivals replaced the entry's metric with a newer object
+    (the entry then hands back the LIVE metric instead of rebuilding).
     """
     if model is None or not getattr(model, "_pyiqa_gutted", False):
         return model
+    recipe = getattr(model, "_pyiqa_recipe", None)
+    if recipe is not None:
+        hit = _METRIC_CACHE.get(tuple(recipe))
+        if hit is not None and not getattr(hit[1], "_pyiqa_gutted", False):
+            return hit[1]  # someone already revived this family/key
+        if hit is not None:
+            family, key, factory = recipe[0], recipe[1], hit[2]
+            del _METRIC_CACHE[tuple(recipe)]
+            logger.info(
+                "(pyiqa-toolbox) fully-unloaded metric rebuilt for the next "
+                "score (reload from disk)"
+            )
+            return get_cached_metric(family, key, factory)
+    # fallback for gutted shells without a recipe: identity lookup
     for key, (family, m, factory) in list(_METRIC_CACHE.items()):
         if m is model:
             del _METRIC_CACHE[key]
@@ -402,6 +422,12 @@ def drop_metric(metric):
             logger.debug("drop_metric gut failed: %s", exc)
             return False
         metric._pyiqa_gutted = True
+        # stamp the recipe so later references to THIS shell can find the
+        # cache entry even after other revivals replaced the entry's metric
+        for key, (_family, m, _factory) in _METRIC_CACHE.items():
+            if m is metric:
+                metric._pyiqa_recipe = key
+                break
         logger.info(
             "(pyiqa-toolbox) metric fully unloaded (VRAM + RAM freed; "
             "reloads from disk on the next score)"
@@ -440,103 +466,38 @@ def _device_matches(real, target):
     return real.index == target.index
 
 
-def _sync_quantized_scales(metric, device):
-    """Move ComfyUI QuantizedTensor scales after a device move.
-
-    ``nn.Module.to`` moves each QuantizedTensor's ``_qdata`` (via the flatten
-    protocol) but NOT the scale tensor inside its ``_params`` dataclass - the
-    module never sees it. A cuda int8 weight with a cpu scale then computes
-    silently WRONG values. Duck-typed so pyiqa_utils needs no comfy import.
-    """
-    try:
-        for _, param in metric.named_parameters():
-            data = param.data
-            params = getattr(data, "_params", None)
-            scale = getattr(params, "scale", None) if params is not None else None
-            if isinstance(scale, torch.Tensor) and not _device_matches(
-                scale.device, device
-            ):
-                new_params = dataclasses.replace(params, scale=scale.to(device))
-                param.data = data._copy_with(params=new_params, clone_params=False)
-    except Exception as exc:  # never let bookkeeping break inference
-        logger.debug("_sync_quantized_scales: %s", exc)
-
-
-def _has_quantized_params(metric):
-    """True if the metric holds ComfyUI QuantizedTensor weights (int8_convrot).
-
-    Those cannot live on the CPU: comfy_kitchen's int8/dequant kernels are
-    CUDA-only, and ``.to('cpu')`` leaves them in a state that computes silently
-    wrong values. Such metrics must stay on the GPU until they are evicted
-    (variant switch) or the process ends.
-    """
-    try:
-        for _, param in metric.named_parameters():
-            if getattr(param.data, "_qdata", None) is not None:
-                return True
-    except Exception:
-        pass
-    return False
-
-
 def offload_metric_cache():
-    """React to ComfyUI's Edit > Unload Models: move cached metrics to CPU.
+    """React to ComfyUI's Edit > Unload Models: release every cached metric.
 
-    Matches ComfyUI's own unload semantics (models are offloaded to system
-    RAM, not deleted), so the metrics stay warm and are moved back onto the
-    GPU by ``ensure_on_device`` on the next score/loader call. int8 metrics
-    cannot be parked (see ``_has_quantized_params``), so they are fully
-    unloaded instead - the consistent collapse rule everywhere in this pack.
+    The pack has no CPU-parking path (it proved buggy: pyiqa keeps plain
+    tensor attributes that ``.to()`` does not move, and int8 weights corrupt
+    outright), so "unload" here means a FULL unload - metrics are dropped
+    from VRAM and RAM and reload from disk on the next score.
     """
-    moved = []
-    for key, (family, metric, _factory) in list(_METRIC_CACHE.items()):
-        if getattr(metric, "_pyiqa_gutted", False):
-            continue  # tombstone from a previous full unload
-        if _has_quantized_params(metric):
-            logger.info(
-                "(pyiqa-toolbox) %s is int8_convrot and cannot be parked in "
-                "RAM; fully unloading it instead", family
-            )
-            drop_metric(metric)
-            continue
-        try:
-            metric.to(torch.device("cpu"))
-            _sync_quantized_scales(metric, torch.device("cpu"))
-            moved.append(f"{family} {_metric_size_gib(metric):.1f}GiB")
-        except Exception as exc:  # never let cleanup break the unload action
-            logger.debug("offload_metric_cache: %s failed: %s", family, exc)
-    if moved:
-        logger.info(
-            "(pyiqa-toolbox) metrics parked in system RAM: %s", ", ".join(moved)
-        )
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-
-def evict_metric_cache(fully=True):
-    """The Unload Pyiqa Models node's action: release every cached metric.
-
-    fully=True drops each metric from VRAM and RAM (reload from disk next
-    score); fully=False parks them in system RAM (int8 collapses to a drop).
-    """
-    if not fully:
-        return offload_metric_cache()
     for _key, (_family, metric, _factory) in list(_METRIC_CACHE.items()):
         if not getattr(metric, "_pyiqa_gutted", False):
             drop_metric(metric)
 
 
+def evict_metric_cache(fully=True):
+    """The Unload Pyiqa Models node's action: release every cached metric.
+
+    fully is kept for call-signature compatibility; there is only one release
+    semantic now (full unload - VRAM and RAM).
+    """
+    offload_metric_cache()
+
+
 def ensure_on_device(metric, device=None):
-    """Move ``metric`` onto the intended compute device if a previous offload
-    (or a stale device attribute) left it elsewhere.
+    """Return the metric's true compute device, moving it if needed.
 
     pyiqa's ``InferenceModel.device`` is set once at construction and is NOT
     updated by ``.to()``, so a caller handing us ``model.device`` can be handing
     us a stale value; and ``InferenceModel.forward`` computes on
     ``self.dummy_param.device``. To avoid silently running an 18 GB metric on
     the CPU, a CPU hint is ignored whenever a GPU is actually available - we
-    always target the real compute device. Returns the metric's true device.
+    always target the real compute device. With parking removed, metrics are
+    normally already where they should be; this stays as a safety net.
     """
     if device is None:
         device = default_device()
@@ -548,37 +509,8 @@ def ensure_on_device(metric, device=None):
             "(pyiqa-toolbox) moving metric to %s (found on %s)", target, real
         )
         metric.to(target)
-        _sync_quantized_scales(metric, target)
         real = target
     return real if real is not None else target
-
-
-def release_metric(metric):
-    """Park one metric in system RAM and hand its VRAM back to the allocator.
-
-    Used by the score nodes' ``free VRAM (park in RAM)`` mode so the next
-    generation gets full VRAM; the metric is reloaded lazily (``ensure_on_device``)
-    on the next score. int8_convrot metrics cannot be parked - CPU residency
-    silently corrupts their values - so they collapse to a FULL unload
-    (``drop_metric``): VRAM and RAM freed, reload from disk next score.
-    Returns True if the metric is no longer on the GPU.
-    """
-    if _has_quantized_params(metric):
-        logger.info(
-            "(pyiqa-toolbox) int8_convrot metric cannot be parked in RAM; "
-            "fully unloading it instead (reloads from disk next score)"
-        )
-        return drop_metric(metric)
-    try:
-        metric.to(torch.device("cpu"))
-        _sync_quantized_scales(metric, torch.device("cpu"))
-    except Exception as exc:
-        logger.debug("release_metric: %s", exc)
-        return False
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    return True
 
 
 def make_room_for_metric(device=None):

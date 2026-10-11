@@ -80,10 +80,11 @@ matching folder from this repo automatically (default repo id
 `PYIQA_TOOLBOX_INT8_REPO` env var). Score with the **QReAlign NR Score**
 node (task: quality IQA or aesthetic IAA).
 
-**Memory note:** ComfyUI's int8 kernels are CUDA-only, so int8 models are
-GPU-resident — the toolbox's `free_after_score` and unload options are no-ops
-for them (the model keeps its VRAM until a later loader evicts it). Use the
-plain (bf16) entry instead if you need full eviction.
+**Memory note:** ComfyUI's int8 kernels are CUDA-only, so int8 models can
+never be parked in system RAM (a CPU detour silently corrupts their scores).
+The toolbox handles this for you: its `unload model (VRAM + RAM)` mode works
+for int8 exactly as labelled — the model is dropped from memory and reloads
+from disk on the next score.
 
 ## Using outside ComfyUI
 

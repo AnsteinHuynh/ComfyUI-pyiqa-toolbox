@@ -215,23 +215,23 @@ def main():
     for bad in ("FGResQ.pth", "FGResQ_Degradation.pth"):
         assert bad not in fg_opts, f"{bad} must not appear as a custom"
 
-    t_opts = pack.NODE_CLASS_MAPPINGS["TOPIQLoader"].INPUT_TYPES()["required"][
-        "custom_checkpoint"
-    ][0]
-    print("TOPIQ custom_checkpoint options:", t_opts)
-    assert t_opts[0] == "(none)"
-    assert not any(str(o).lower().startswith("cfanet_") for o in t_opts), (
-        f"cfanet_ default weights must not appear as customs: {t_opts}"
-    )
-
-    af_opts = pack.NODE_CLASS_MAPPINGS["AFINELoader"].INPUT_TYPES()["required"][
-        "custom_checkpoint"
-    ][0]
-    print("A-FINE custom_checkpoint options:", af_opts)
-    assert af_opts[0] == "(none)"
-    assert "afine.pth" not in [str(o).lower() for o in af_opts], (
-        f"afine.pth must not appear as a custom: {af_opts}"
-    )
+    # custom combos exist ONLY when customs are on disk; when they exist,
+    # pyiqa's own defaults must not appear among them
+    for node_id, patterns in (
+        ("TOPIQLoader", ("cfanet_",)),
+        ("AFINELoader", ("afine.pth",)),
+    ):
+        req = pack.NODE_CLASS_MAPPINGS[node_id].INPUT_TYPES()["required"]
+        opts = req.get("custom_checkpoint")
+        if opts is None:
+            print(f"{node_id}: no customs on disk -> custom combos hidden")
+            continue
+        assert opts[0][0] == "(none)", f"{node_id}: (none) must stay first"
+        print(f"{node_id} custom_checkpoint options:", opts[0])
+        for bad in patterns:
+            assert bad not in [str(o).lower() for o in opts[0]], (
+                f"{node_id}: {bad} must not appear as a custom: {opts[0]}"
+            )
 
     image = fake_image(2, 256, 256, seed=1)
     image2 = fake_image(2, 256, 256, seed=2)
@@ -362,21 +362,32 @@ def main():
     (qcr,) = pack.NODE_CLASS_MAPPINGS["QualiCLIPNRScore"]().score(qc, image)
     print(f"musiq={mqr[0]:.4f}  clipiqa={cir[0]:.4f}  qualiclip={qcr[0]:.4f}")
 
-    print("\n-- FID (image-batch) --")
+    print("\n-- FID (image-batch, multi-wire) --")
     (fm,) = pack.NODE_CLASS_MAPPINGS["FIDLoader"]().load("fid", "(none)", None)
     batch = fake_image(8, 256, 256, seed=11)
-    (f_same,) = pack.NODE_CLASS_MAPPINGS["FIDScore"]().score(fm, batch, batch, "clean")
+    # INPUT_IS_LIST: the score receives LISTS of batches per side
+    (f_same,) = pack.NODE_CLASS_MAPPINGS["FIDScore"]().score(
+        fm, [batch], [batch], "clean"
+    )
+    # two separate wires on the same side must concatenate, not overwrite
+    (f_split,) = pack.NODE_CLASS_MAPPINGS["FIDScore"]().score(
+        fm, [batch[:4], batch[4:]], [batch], "clean"
+    )
     (f_diff,) = pack.NODE_CLASS_MAPPINGS["FIDScore"]().score(
-        fm, batch, fake_image(8, 256, 256, seed=12), "clean"
+        fm, [batch], [fake_image(8, 256, 256, seed=12)], "clean"
     )
     # Analytically FID(a,a)=0; pyiqa's frechet_distance regularises the sqrt at
     # eps=1e-6, so a tiny negative value is normal.
     assert abs(f_same) < 1e-3, f"FID(a,a) = {f_same}, expected ~0"
+    assert abs(f_split - f_same) < 1e-6, (
+        f"split-wire FID {f_split} != single-batch FID {f_same}"
+    )
     assert f_diff > 0, f"FID of different sets should be > 0, got {f_diff}"
-    print(f"fid identity(a,a)={f_same:.6f}  different-sets={f_diff:.4f}")
+    print(f"fid identity(a,a)={f_same:.6f}  split-wire={f_split:.6f}  "
+          f"different-sets={f_diff:.4f}")
     try:
         pack.NODE_CLASS_MAPPINGS["FIDScore"]().score(
-            fm, batch[:1], batch, "clean"
+            fm, [batch[:1]], [batch], "clean"
         )
         raise AssertionError("FID with 1 image per side should have raised")
     except ValueError as e:
@@ -429,7 +440,6 @@ def main():
     from pyiqa_toolbox_smoke.nodes._common import (
         MEMORY_DROP,
         MEMORY_KEEP,
-        MEMORY_PARK,
         LazyScoreMixin,
         with_memory_management,
     )
@@ -449,13 +459,14 @@ def main():
             )
         # no non-standard 'enabled' toggle
         assert "enabled" not in inputs, f"{node_id} still exposes 'enabled'"
-        # memory_management on every node that owns a metric, defaulting to park
+        # memory_management on every node that owns a metric: exactly two modes
+        # (unload / keep), unload as the default
         if "model" in inputs:
             mm = inputs.get("memory_management")
             assert mm is not None, f"{node_id} has no memory_management input"
-            assert mm[1].get("default") == MEMORY_PARK, node_id
-            assert mm[0][0] == MEMORY_PARK, node_id
-            assert set(mm[0]) == {MEMORY_PARK, MEMORY_DROP, MEMORY_KEEP}, node_id
+            assert mm[1].get("default") == MEMORY_DROP, node_id
+            assert mm[0][0] == MEMORY_DROP, node_id
+            assert set(mm[0]) == {MEMORY_DROP, MEMORY_KEEP}, node_id
     print(f"all {score_nodes} score nodes: check_lazy_status + lazy inputs + "
           f"memory_management (no 'enabled' toggle)")
 
@@ -476,8 +487,9 @@ def main():
     assert out1 == ([],), out1
     print("nodes return empty outputs when lazy inputs are absent")
 
-    # the memory_management decorator: keep_loaded leaves the metric put,
-    # park routes it through release_metric (to CPU), drop guts it in place
+    # the memory_management decorator: keep_loaded leaves the metric put; any
+    # other value (default) drops it. The fake _Metric cannot be gutted (no
+    # nn.Module structure), so the drop path is asserted on a real metric below.
     import torch as _torch
 
     class _Metric:
@@ -497,10 +509,7 @@ def main():
     kept = _Metric()
     assert node.score(model=kept, memory_management=MEMORY_KEEP) == ("ran",)
     assert kept.device.type == "cuda", kept.device
-    freed = _Metric()
-    node.score(model=freed, memory_management=MEMORY_PARK)
-    assert freed.device.type == "cpu", freed.device
-    print("memory_management: keep_loaded leaves it, park frees the VRAM")
+    print("memory_management: keep_loaded leaves it on the GPU")
 
     # full-unload (gut-and-drop) end to end on a real family metric: score,
     # drop, then score AGAIN with the same (now hollow) object - the decorator
@@ -533,10 +542,11 @@ def main():
     assert not leak, f"FGResQ dropdown leaks pyiqa default weights: {leak}"
     qcustoms = utils.list_pyiqa_checkpoints(require_config=True)
     print("snapshot dirs:", [label for label, _ in qcustoms])
-    perc_opts = pack.NODE_CLASS_MAPPINGS["LPIPSLoader"].INPUT_TYPES()["required"][
-        "custom_checkpoint"
-    ][0]
-    print("LPIPS custom_checkpoint options:", perc_opts)
+    perc_opts = pack.NODE_CLASS_MAPPINGS["LPIPSLoader"].INPUT_TYPES()[
+        "required"
+    ].get("custom_checkpoint")
+    print("LPIPS custom_checkpoint options:",
+          perc_opts[0] if perc_opts else "(hidden - no customs on disk)")
 
     print("\n-- metric cache --")
     import torch
