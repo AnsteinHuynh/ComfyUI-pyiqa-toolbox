@@ -91,8 +91,8 @@ try:
                     [_LOCAL_PYIQA_DIR],
                     _entry[1],
                 )
-            elif _entry is not None:
-                folder_paths.folder_names_and_paths["pyiqa"] = [_LOCAL_PYIQA_DIR]
+            # any other shape: leave the registration untouched rather than
+            # rewriting it into a form ComfyUI does not expect
     except Exception:
         pass
 
@@ -314,18 +314,26 @@ _METRIC_CACHE = {}
 
 
 def get_cached_metric(family, key, factory):
-    hit = _METRIC_CACHE.get(key)
+    # namespaced by (family, key): a bare key from one family colliding with
+    # an equal key from another would otherwise silently hand back the WRONG
+    # family's metric
+    entry = (family, key)
+    hit = _METRIC_CACHE.get(entry)
     if hit is not None:
         # entries are stored as (family, metric) so the stale sweep can match on
         # family; hand back the metric, not the bookkeeping tuple
         return hit[1]
-    stale = [k for k, (f, _) in _METRIC_CACHE.items() if f == family and k != key]
+    stale = [k for k, (f, _) in _METRIC_CACHE.items() if f == family and k != entry]
     for k in stale:
+        # park the outgoing metric before dropping it: ComfyUI's node output
+        # cache may still hold a reference, so a bare del would leave it on
+        # the GPU (release_metric is a no-op for int8 metrics by design)
+        release_metric(_METRIC_CACHE[k][1])
         del _METRIC_CACHE[k]
     if stale and torch.cuda.is_available():
         torch.cuda.empty_cache()
     metric = factory()
-    _METRIC_CACHE[key] = (family, metric)
+    _METRIC_CACHE[entry] = (family, metric)
     return metric
 
 
@@ -508,5 +516,5 @@ def make_room_for_metric(device=None):
         free_memory(1e32, target)
         return True
     except Exception as exc:  # never let the relief break a load
-        logging.getLogger(__name__).debug("make_room_for_metric: %s", exc)
+        logger.debug("make_room_for_metric: %s", exc)
         return False

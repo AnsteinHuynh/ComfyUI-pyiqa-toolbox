@@ -72,7 +72,9 @@ try:
         }
     )
 except Exception as e:
-    logger.warning(f"(pyiqa-toolbox) could not import pyiqa nodes: {e}")
+    # exc_info: a single typo'd import must not degrade to "zero nodes +
+    # one warning line" with no diagnostic to trace
+    logger.exception(f"(pyiqa-toolbox) could not import pyiqa nodes: {e}")
 
 
 def _install_unload_hook():

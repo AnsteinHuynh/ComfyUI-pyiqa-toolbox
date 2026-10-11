@@ -15,6 +15,7 @@ ours first and hand it across by temporarily patching that one classmethod.
 import json
 import logging
 import os
+import threading
 
 import torch
 from safetensors import safe_open
@@ -24,6 +25,10 @@ logger = logging.getLogger(__name__)
 LAYOUT = "TensorWiseINT8Layout"
 INT8_SUFFIX = "-int8-convrot"
 QUANT_MARKER = ".comfy_quant"
+
+# the from_pretrained handover below is process-global; serialized so a
+# concurrent transformers load in another thread can't receive our model
+_HANDOVER_LOCK = threading.Lock()
 
 
 def _comfy_quant_ops():
@@ -175,10 +180,11 @@ def create_int8_metric(int8_dir, device):
     def _handed_over(path, dtype=None, **kwargs):
         return model
 
-    AutoModelForImageTextToText.from_pretrained = staticmethod(_handed_over)
-    try:
-        # dtype is irrelevant (weights are already in place); the arch still
-        # loads its processor from int8_dir, which carries the config files.
-        return pyiqa.create_metric("qrealign", device=device, model=int8_dir)
-    finally:
-        AutoModelForImageTextToText.from_pretrained = original
+    with _HANDOVER_LOCK:
+        AutoModelForImageTextToText.from_pretrained = staticmethod(_handed_over)
+        try:
+            # dtype is irrelevant (weights are already in place); the arch still
+            # loads its processor from int8_dir, which carries the config files.
+            return pyiqa.create_metric("qrealign", device=device, model=int8_dir)
+        finally:
+            AutoModelForImageTextToText.from_pretrained = original

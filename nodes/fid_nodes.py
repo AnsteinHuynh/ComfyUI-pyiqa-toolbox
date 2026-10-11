@@ -48,6 +48,7 @@ class FIDLoader(FamilyLoaderBase):
         "first use."
     )
     CUSTOM_PATTERNS = ()
+    FREE_COMFY_MEMORY = True  # InceptionV3 is small, but keep the README's word
     OUTPUT_TOOLTIPS = (
         "The loaded FID / sFID metric. Wire it into FID Score.",
     )

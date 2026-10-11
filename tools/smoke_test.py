@@ -12,7 +12,8 @@ import types
 
 import torch
 
-PKG_DIR = os.path.dirname(os.path.abspath(__file__))
+# pack root = one level up from this file (tools/)
+PKG_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def inject_fake_folder_paths():
