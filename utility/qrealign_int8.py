@@ -44,14 +44,32 @@ def _read_marker(reader, key):
 
 
 def _build_model(config, allow_meta=True):
-    """Model skeleton. Meta first (fast); falls back to CPU init when the arch
-    keeps non-persistent buffers (rotary inv_freq etc.) that meta cannot run."""
+    """Model skeleton. Best path first:
+
+    1. accelerate ``init_empty_weights(include_buffers=False)`` - params on
+       meta, non-persistent buffers (rotary inv_freq tables) actually computed
+       on CPU (KBs). Fast and RAM-light.
+    2. full-meta ``torch.device('meta')`` - fine for params, but the
+       non-persistent buffers come out as meta garbage (values were never
+       computed); the caller then rebuilds on CPU as a last resort.
+    3. CPU init - correct but materializes and random-initializes the whole
+       model in system RAM (17.5 GiB for Pro: slow, and under RAM pressure it
+       is what crashed ComfyUI with an access violation while reading the
+       safetensors).
+    """
     from transformers import AutoModelForImageTextToText
 
     if allow_meta:
         try:
+            from accelerate import init_empty_weights
+
+            with init_empty_weights(include_buffers=False):
+                return AutoModelForImageTextToText.from_config(config), "params_meta"
+        except ImportError:
+            logger.debug("accelerate not installed; falling back to meta/CPU init")
+        try:
             with torch.device("meta"):
-                return AutoModelForImageTextToText.from_config(config), True
+                return AutoModelForImageTextToText.from_config(config), "full_meta"
         except Exception as exc:  # pragma: no cover - arch-specific
             logger.debug("meta init failed (%s); falling back to CPU init", exc)
     previous = torch.get_default_dtype()
@@ -59,12 +77,12 @@ def _build_model(config, allow_meta=True):
     try:
         return AutoModelForImageTextToText.from_config(config).to(
             torch.device("cpu")
-        ), False
+        ), "cpu"
     finally:
         torch.set_default_dtype(previous)
 
 
-def _load_weights(model, safetensors_path, device, meta_build):
+def _load_weights(model, safetensors_path, device, build_mode):
     QuantizedTensor, get_layout_class = _comfy_quant_ops()
     layout_cls = get_layout_class(LAYOUT)
 
@@ -117,15 +135,23 @@ def _load_weights(model, safetensors_path, device, meta_build):
                 else:
                     module._buffers[attr] = tensor
 
-    if meta_build:
-        # non-persistent buffers (rotary tables) are meta on a meta skeleton and
-        # are recomputed by the CPU-initialized build instead
+    if build_mode == "full_meta":
+        # non-persistent buffers (rotary tables) are meta garbage on a full-meta
+        # skeleton - their values were never computed; the caller retries with
+        # a CPU-initialized build
         if any(b.is_meta for _, b in model.named_buffers()):
             logger.info(
                 "(pyiqa-toolbox) int8 model has meta buffers; rebuilding with "
                 "CPU init (one-off)"
             )
             return None
+    # on the params_meta path those buffers are real but on CPU (KBs) - move
+    # them onto the compute device now
+    for mname, module in model.named_modules():
+        for attr in list(module._buffers):
+            buf = module._buffers[attr]
+            if buf is not None and not buf.is_meta and buf.device != device:
+                module._buffers[attr] = buf.to(device)
 
     model.tie_weights()
     leftover = [
@@ -153,8 +179,8 @@ def load_int8_model(int8_dir, device):
     st_file = _find_safetensors(int8_dir)
     model = None
     for allow_meta in (True, False):
-        candidate, meta_build = _build_model(config, allow_meta=allow_meta)
-        model = _load_weights(candidate, st_file, device, meta_build)
+        candidate, build_mode = _build_model(config, allow_meta=allow_meta)
+        model = _load_weights(candidate, st_file, device, build_mode)
         if model is not None:
             return model.eval()
     raise RuntimeError("could not build the int8 model")  # pragma: no cover

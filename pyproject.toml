@@ -1,9 +1,24 @@
 [project]
 name = "comfyui-pyiqa-toolbox"
 description = "ComfyUI nodes wrapping pyiqa (IQA-Pytorch) quality metrics - loader + score nodes per architecture family (Q-ReAlign, FGResQ, ...)."
-version = "0.1.0"
+version = "0.2.0"
+readme = "README.md"
+requires-python = ">=3.10"
 license = {text = "MIT"}
-dependencies = ["pyiqa>=0.1.15", "transformers>=5.0"]
+authors = [{name = "Anstein Huynh"}]
+keywords = [
+    "comfyui",
+    "custom-nodes",
+    "image-quality",
+    "iqa",
+    "pyiqa",
+    "image-quality-assessment",
+    "int8",
+    "quantization",
+]
+# transformers>=5 is needed only by the QReAlign nodes (and the FGResQ
+# transformers-5 fix); see requirements.txt for why it is not pinned here.
+dependencies = ["pyiqa>=0.1.15"]
 
 [project.urls]
 Repository = "https://github.com/AnsteinHuynh/ComfyUI-pyiqa-toolbox"

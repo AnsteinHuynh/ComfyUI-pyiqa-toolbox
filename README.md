@@ -18,7 +18,7 @@ node loads its inputs lazily — see *Lazy evaluation* below.
 
 | Family / node | Inputs | Outputs | Direction / range | Order |
 |---|---|---|---|---|
-| **QReAlign** Loader | model_name (mini-0.8B / lite-4B / pro-9B + customs), dtype, quantization (none (native) / int8_convrot), int8_hf_repo | model | — | — |
+| **QReAlign** Loader | model_name (mini-0.8B / lite-4B / pro-9B, each also as an int8_convrot entry, + customs), dtype, quantization (none (native) / int8_convrot), int8_hf_repo | model | — | — |
 | QReAlign NR Score | model, image, task (quality IQA / aesthetic IAA) | score | 0-1, higher better | NR |
 | **FGResQ** Loader | checkpoint ((default) + customs) | model | — | — |
 | FGResQ NR Score | model, image | score | 0-1, higher better | NR |
@@ -215,14 +215,14 @@ folder(s). Each registered folder is checked for two layouts:
 - HF hub cache — `models--q-future--Q-ReAlign-*/snapshots/<hash>/` (complete
   snapshots only; incomplete ones fall back to finishing the download).
 
-This machine points the folder straight at the existing caches via
-`extra_model_paths.yaml` (nothing is duplicated or re-downloaded):
+Point the folder at any weight stores you already have via
+`extra_model_paths.yaml` (nothing is duplicated or re-downloaded), e.g.
+reusing the HuggingFace and torch-hub caches pyiqa already downloads into:
 
 ```yaml
     pyiqa: |
-        C:/Users/kerok/.cache/huggingface/hub
-        C:/Users/kerok/.cache/torch/hub/pyiqa
-        X:/Models
+        C:/Users/<you>/.cache/huggingface/hub
+        C:/Users/<you>/.cache/torch/hub/pyiqa
 ```
 
 Without a yaml entry, `<ComfyUI>/models/pyiqa` is used as the folder. Every
@@ -255,7 +255,9 @@ the previous model of that family from VRAM.
   transformers ≤ 5.5.4 where the checkpoint loads as-is.
 - Weights auto-download on first use (pyiqa release/HF mirror for FGResQ;
   `q-future/Q-ReAlign-*` HF repos for Q-ReAlign). Q-ReAlign additionally needs
-  `transformers>=5.0`.
+  `transformers>=5.0` — deliberately **not** in requirements.txt (forcing that
+  upgrade on every install can break other packs); the QReAlign Loader checks
+  the version at load time and raises with the exact pip command to fix it.
 - `target` and `reference` must share a batch size in the pair node.
 - Future families slot in as new `nodes/*_nodes.py` files with their own
   loader; fid/sfid will need folder-pair nodes instead of image inputs.

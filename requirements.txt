@@ -1,2 +1,5 @@
+# transformers>=5.0 is needed ONLY by the QReAlign nodes (Qwen3.5-VL) and the
+# FGResQ transformers-5 fix. It is deliberately not pinned here: forcing that
+# upgrade on every install can break other custom nodes. The QReAlign Loader
+# checks the version at load time and prints the exact pip command to fix it.
 pyiqa>=0.1.15
-transformers>=5.0

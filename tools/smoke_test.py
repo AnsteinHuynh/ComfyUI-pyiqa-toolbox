@@ -30,12 +30,19 @@ def inject_fake_folder_paths():
     tmp = tempfile.gettempdir()
     models_dir = os.path.join(tmp, "pyiqa_toolbox_smoke_models")
     local_models_pyiqa = os.path.join(models_dir, "pyiqa")
-    pyiqa_dirs = [
-        "I:/MyApps/ComfyUi/models/pyiqa",
-        "C:/Users/kerok/.cache/huggingface/hub",
-        "C:/Users/kerok/.cache/torch/hub/pyiqa",
-        "X:/Models",
-    ]
+    # personal search dirs (override: PYIQA_TOOLBOX_SMOKE_PATHS="dir;dir").
+    # Absent dirs are dropped, so the test runs on any machine - the
+    # machine-specific assertions below skip themselves when they must.
+    env_paths = os.environ.get("PYIQA_TOOLBOX_SMOKE_PATHS")
+    if env_paths:
+        pyiqa_dirs = [d for d in env_paths.split(";") if d]
+    else:
+        pyiqa_dirs = [
+            "I:/MyApps/ComfyUi/models/pyiqa",
+            "C:/Users/kerok/.cache/huggingface/hub",
+            "C:/Users/kerok/.cache/torch/hub/pyiqa",
+            "X:/Models",
+        ]
     pyiqa_dirs = [d for d in pyiqa_dirs if os.path.isdir(d)]
     yaml_sim = os.path.join(
         tmp, "pyiqa_toolbox_smoke_yaml_sim", "models", "pyiqa"
@@ -180,16 +187,19 @@ def main():
             )
     pro_here = os.path.exists("I:/MyApps/ComfyUi/models/pyiqa/Q-ReAlign-Pro-9B")
     if pro_path and pro_here:
-        assert len(q_opts) == 3, (
+        assert len(q_opts) == 6, (
             f"with Q-ReAlign-Pro-9B present in models/pyiqa the list must be "
-            f"exactly the 3 built-ins, got {q_opts}"
+            f"the 3 built-ins + 3 int8 entries, got {q_opts}"
+        )
+        assert q_opts[3:] == [k + " (int8_convrot)" for k in builtin_labels], (
+            f"int8 entries must follow the built-ins, got {q_opts[3:]}"
         )
         assert _norm(pro_path).startswith(_norm("I:/MyApps/ComfyUi/models/pyiqa")), (
             f"Pro-9B should resolve from the I: models/pyiqa folder, got {pro_path}"
         )
     else:
         print("NOTE: I:/MyApps/ComfyUi/models/pyiqa/Q-ReAlign-Pro-9B absent "
-              "-> exact-3 assertion vacuous")
+              "-> exact-6 assertion vacuous")
 
     fg_opts = pack.NODE_CLASS_MAPPINGS["FGResQLoader"].INPUT_TYPES()["required"][
         "checkpoint"

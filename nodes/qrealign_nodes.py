@@ -52,6 +52,21 @@ TASKS = {
 }
 
 
+def _require_transformers_v5():
+    """Q-ReAlign (Qwen3.5-VL) needs transformers>=5. Deliberately NOT pinned in
+    requirements.txt - forcing that upgrade on every user for one family can
+    break other packs - so check here and fail with the fix in hand."""
+    import transformers
+
+    major = int(transformers.__version__.split(".")[0])
+    if major < 5:
+        raise RuntimeError(
+            f"Q-ReAlign needs transformers>=5.0 (found {transformers.__version__}). "
+            "Install it into ComfyUI's python with: pip install -U \"transformers>=5\" "
+            "- everything else in this pack works without it."
+        )
+
+
 def _builtin_resolved_paths():
     """Resolved local paths of the built-in variants (whatever the search chain
     finds); used to drop them from the custom-dir scan so a broad search path
@@ -95,7 +110,17 @@ def _resolve_model_arg(label):
 
 INT8_QUANT = "int8_convrot"
 INT8_SUFFIX = "-int8-convrot"
+INT8_LABEL_SUFFIX = " (int8_convrot)"
 DEFAULT_INT8_REPO = "AnsteinHuynh/Q-ReAlign-int8-convrot"
+
+
+def _int8_variant_base(label):
+    """Dropdown label -> built-in variant label if it is an int8 entry."""
+    if label.endswith(INT8_LABEL_SUFFIX):
+        base = label[: -len(INT8_LABEL_SUFFIX)]
+        if base in QREALIGN_VARIANTS:
+            return base
+    return None
 
 
 def _int8_complete(path):
@@ -105,6 +130,23 @@ def _int8_complete(path):
         and os.path.isfile(os.path.join(path, "config.json"))
         and glob.glob(os.path.join(path, "*.safetensors"))
     )
+
+
+def _int8_repo_folder_size(repo, folder):
+    """Human-readable size of ``folder`` in ``repo`` for the download log
+    (first run can be 1.5-11.5 GiB - worth announcing). None if unknown."""
+    try:
+        from huggingface_hub import HfApi
+
+        info = HfApi().model_info(repo, files_metadata=True)
+        total = sum(
+            (s.size or 0) for s in (info.siblings or []) if s.rfilename.startswith(folder + "/")
+        )
+        if total > 0:
+            return f"{total / 2**30:.1f} GiB, one-time"
+    except Exception:
+        pass
+    return None
 
 
 def _resolve_int8_dir(label, repo):
@@ -129,9 +171,10 @@ def _resolve_int8_dir(label, repo):
             f"no local {name} and huggingface_hub is not installed ({exc})"
         ) from exc
     target = os.path.join(local_pyiqa_dir(), name)
+    size_note = _int8_repo_folder_size(repo, name)
     logger.info(
-        "(pyiqa-toolbox) %s not local; downloading from %s into %s",
-        name, repo, target,
+        "(pyiqa-toolbox) %s not local; downloading from %s into %s%s",
+        name, repo, target, f" ({size_note})" if size_note else "",
     )
     path = snapshot_download(repo_id=repo, local_dir=target)
     if not _int8_complete(path):
@@ -149,10 +192,12 @@ class QReAlignLoader:
     CATEGORY = "pyiqa/QReAlign"
     DESCRIPTION = (
         "Loads a Q-ReAlign scorer (Qwen3.5-VL backbone, Q-Align recipe): "
-        "mini-0.8B / lite-4B / pro-9B built-ins plus custom snapshot folders "
-        "from models/pyiqa. The int8_convrot option loads the ConvRot-rotated "
-        "int8 quants (about a third less size/VRAM; produced by this pack's "
-        "quantizer and downloadable from your HuggingFace repo)."
+        "mini-0.8B / lite-4B / pro-9B built-ins, each also available as an "
+        "int8_convrot build (a third less size/VRAM, produced by this pack's "
+        "quantizer and downloadable from a HuggingFace repo), plus custom "
+        "snapshot folders from models/pyiqa. Needs transformers>=5.0 - checked "
+        "at load time with a clear error (not forced in requirements.txt, so "
+        "other packs are not upgraded behind your back)."
     )
 
     @classmethod
@@ -161,15 +206,17 @@ class QReAlignLoader:
             "required": {
                 "model_name": (
                     list(QREALIGN_VARIANTS.keys())
+                    + [k + INT8_LABEL_SUFFIX for k in QREALIGN_VARIANTS]
                     + [label for label, _ in _custom_options()],
                     {
                         "default": "qrealign-mini-0.8B",
                         "tooltip": (
-                            "Mini 0.8B (fast) / Lite 4B / Pro 9B (best correlation, slowest), "
-                            "plus any custom snapshot-style folder in models/pyiqa (dir with a "
-                            "config.json, e.g. your own Qwen3.5-VL quality fine-tune). Built-ins "
-                            "come from the pyiqa folders/HF cache; absent weights auto-download "
-                            "from q-future on first use."
+                            "Mini 0.8B (fast) / Lite 4B / Pro 9B (best correlation, slowest); "
+                            "the '(int8_convrot)' entries load the quantized builds instead "
+                            "(same pick, a third less VRAM, tiny score drift). Plus any custom "
+                            "snapshot-style folder in models/pyiqa (dir with a config.json, e.g. "
+                            "your own Qwen3.5-VL quality fine-tune). Built-ins come from the "
+                            "pyiqa folders/HF cache; absent weights auto-download on first use."
                         ),
                     },
                 ),
@@ -224,9 +271,11 @@ class QReAlignLoader:
 
     def load(self, model_name, dtype, quantization, int8_hf_repo):
         device = default_device()
+        _require_transformers_v5()
+        int8_base = _int8_variant_base(model_name)
 
-        if quantization == INT8_QUANT:
-            int8_dir = _resolve_int8_dir(model_name, int8_hf_repo)
+        if quantization == INT8_QUANT or int8_base is not None:
+            int8_dir = _resolve_int8_dir(int8_base or model_name, int8_hf_repo)
 
             def factory():
                 make_room_for_metric(device)

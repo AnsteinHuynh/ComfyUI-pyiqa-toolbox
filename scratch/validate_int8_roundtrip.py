@@ -14,9 +14,15 @@ import sys
 
 import torch
 
-TOOLBOX = r"C:\Users\kerok\apps\ComfyUI-pyiqa-toolbox"
-COMFY = r"C:\MyApps\ComfyUIRoot\20250726-ComfyUI\ComfyUI"
-PYIQA_DIR = r"I:\MyApps\ComfyUi\models\pyiqa"
+import os as _os
+
+def _p(key, default):
+    """env override PYIQA_TOOLBOX_<KEY>, else the dev machine default."""
+    return _os.environ.get("PYIQA_TOOLBOX_" + key, default)
+
+TOOLBOX = _p("ROOT", r"C:\Users\kerok\apps\ComfyUI-pyiqa-toolbox")
+COMFY = _p("COMFY", r"C:\MyApps\ComfyUIRoot\20250726-ComfyUI\ComfyUI")
+PYIQA_DIR = _p("MODELS", r"I:\MyApps\ComfyUi\models\pyiqa")
 
 sys.path.insert(0, TOOLBOX)
 sys.path.insert(0, COMFY)

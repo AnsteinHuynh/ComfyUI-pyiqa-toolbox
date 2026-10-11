@@ -153,8 +153,15 @@ class FamilyLoaderBase:
         VARIANT_MAP       {dropdown label: pyiqa registry metric name}
         METRIC_TOOLTIP    tooltip for the variant combo
         CUSTOM_PATTERNS   globs for custom checkpoints; () disables customs
-        DEFAULT_WEIGHTS   arch module name or callable providing default URL
-                          table basenames to exclude from customs
+        DEFAULT_WEIGHTS   arch module name (or tuple of names) whose default
+                          URL-table basenames are excluded from customs
+        METRIC_INPUT_NAME combo input name ("metric"; older families shipped
+                          "model_name" - keep it there to not break saved
+                          workflows)
+        CUSTOM_BASE_INPUT_NAME   likewise for the custom-base combo
+        CUSTOM_BASE_OPTIONS      combo options for the custom-base input
+                          (None = all VARIANT_MAP keys); families whose custom
+                          checkpoints load onto only some heads restrict it
     """
 
     CATEGORY = "pyiqa"
@@ -163,6 +170,9 @@ class FamilyLoaderBase:
     METRIC_TOOLTIP = ""
     CUSTOM_PATTERNS = ()
     DEFAULT_WEIGHTS = None
+    METRIC_INPUT_NAME = "metric"
+    CUSTOM_BASE_INPUT_NAME = "custom_base_metric"
+    CUSTOM_BASE_OPTIONS = None
     DESCRIPTION = ""
     # Set True on families whose model is large enough that loading it after a
     # generation can OOM: the loader then asks ComfyUI to evict its cached
@@ -186,14 +196,29 @@ class FamilyLoaderBase:
     def _default_weight_basenames(cls):
         if cls.DEFAULT_WEIGHTS is None:
             return set()
-        try:
-            module = importlib.import_module(cls.DEFAULT_WEIGHTS)
-            return {
-                os.path.basename(str(url).split("?")[0])
-                for url in getattr(module, "default_model_urls", {}).values()
-            }
-        except Exception:
-            return set()
+        modules = cls.DEFAULT_WEIGHTS
+        if isinstance(modules, str):
+            modules = (modules,)
+        names = set()
+        for module_name in modules:
+            try:
+                module = importlib.import_module(module_name)
+                urls = getattr(module, "default_model_urls", None)
+                if callable(urls):  # some arches expose a callable table
+                    urls = urls()
+                names.update(
+                    os.path.basename(str(url).split("?")[0])
+                    for url in (urls or {}).values()
+                )
+            except Exception:
+                continue
+        return names
+
+    @classmethod
+    def _custom_exclude_paths(cls):
+        """Paths to drop from the custom scan (e.g. the resolved default
+        checkpoint of a family that ships it as a plain models/pyiqa file)."""
+        return ()
 
     @classmethod
     def _custom_options(cls):
@@ -201,7 +226,9 @@ class FamilyLoaderBase:
         for pattern in cls.CUSTOM_PATTERNS:
             options.extend(
                 list_pyiqa_checkpoints(
-                    pattern, exclude_names=cls._default_weight_basenames()
+                    pattern,
+                    exclude_names=cls._default_weight_basenames(),
+                    exclude_paths=cls._custom_exclude_paths(),
                 )
             )
         return options
@@ -209,7 +236,7 @@ class FamilyLoaderBase:
     @classmethod
     def INPUT_TYPES(cls):
         required = {
-            "metric": (
+            cls.METRIC_INPUT_NAME: (
                 list(cls.VARIANT_MAP),
                 {
                     "default": next(iter(cls.VARIANT_MAP)),
@@ -228,10 +255,14 @@ class FamilyLoaderBase:
                     ),
                 },
             )
-            required["custom_base_metric"] = (
-                list(cls.VARIANT_MAP),
+            required[cls.CUSTOM_BASE_INPUT_NAME] = (
+                cls.CUSTOM_BASE_OPTIONS or list(cls.VARIANT_MAP),
                 {
-                    "default": next(iter(cls.VARIANT_MAP)),
+                    "default": (
+                        cls.CUSTOM_BASE_OPTIONS[0]
+                        if cls.CUSTOM_BASE_OPTIONS
+                        else next(iter(cls.VARIANT_MAP))
+                    ),
                     "tooltip": (
                         "Which architecture a custom checkpoint loads onto; a file name "
                         "cannot say which variant it was trained for."
@@ -240,10 +271,28 @@ class FamilyLoaderBase:
             )
         return {"required": required}
 
-    def load(self, metric, custom_checkpoint="(none)", custom_base_metric=None):
+    def load(
+        self,
+        metric=None,
+        custom_checkpoint="(none)",
+        custom_base_metric=None,
+        **kwargs,
+    ):
+        # ComfyUI passes inputs by name; older families renamed the combos
+        # ("model_name" / "custom_base_variant") - accept both spellings while
+        # keeping positional calls (tests, direct use) working
+        if metric is None:
+            metric = kwargs.get(self.METRIC_INPUT_NAME)
+        custom_base = (
+            custom_base_metric
+            if custom_base_metric is not None
+            else kwargs.get(self.CUSTOM_BASE_INPUT_NAME)
+        )
+        if metric is None:
+            raise TypeError(f"missing required input {self.METRIC_INPUT_NAME}")
         device = default_device()
         if custom_checkpoint != "(none)":
-            base = self.VARIANT_MAP[custom_base_metric or metric]
+            base = self.VARIANT_MAP[custom_base or metric]
             path = dict(self._custom_options())[custom_checkpoint]
             key = (path, base, str(device))
             label = custom_checkpoint
@@ -256,9 +305,9 @@ class FamilyLoaderBase:
         def factory():
             if self.FREE_COMFY_MEMORY:
                 make_room_for_metric(device)
-            kwargs = {"pretrained_model_path": path} if path else {}
+            extra = {"pretrained_model_path": path} if path else {}
             return MetricBundle(
-                label, pyiqa.create_metric(base, device=device, **kwargs)
+                label, pyiqa.create_metric(base, device=device, **extra)
             )
 
         bundle = get_cached_metric(self.FAMILY_KEY, key, factory)

@@ -79,9 +79,11 @@ def _fix_fgresq_transformers5_weights(net, main_path=None, deg_path=None):
     main_src = main_path or load_file_from_url(default_model_urls["fgresq"])
     main_sd = _strip_vision_model_prefix(load_checkpoint(main_src))
     missing, unexpected = net.load_state_dict(main_sd, strict=False)
-    assert not unexpected, f"FGResQ main weights still mismatch: {unexpected[:5]}"
+    if unexpected:
+        raise RuntimeError(f"FGResQ main weights still mismatch: {unexpected[:5]}")
     leftover = [k for k in missing if k not in ("default_mean", "default_std")]
-    assert not leftover, f"FGResQ main weights still missing: {leftover[:5]}"
+    if leftover:
+        raise RuntimeError(f"FGResQ main weights still missing: {leftover[:5]}")
 
     deg_src = deg_path or load_file_from_url(default_model_urls["degradation"])
     deg_sd = _strip_vision_model_prefix(load_checkpoint(deg_src))
@@ -99,10 +101,11 @@ def _fix_fgresq_transformers5_weights(net, main_path=None, deg_path=None):
             or k in ("logit_scale", "visual_projection.weight")
         )
     ]
-    assert not missing and not leftover_unexpected, (
-        f"FGResQ degradation weights still mismatch: "
-        f"missing={missing[:3]} unexpected={leftover_unexpected[:3]}"
-    )
+    if missing or leftover_unexpected:
+        raise RuntimeError(
+            f"FGResQ degradation weights still mismatch: "
+            f"missing={missing[:3]} unexpected={leftover_unexpected[:3]}"
+        )
     logger.info(
         "(pyiqa-toolbox) FGResQ weights remapped for transformers>=5.6 "
         "(vision_model. prefix stripped); fine-tuned backbone loaded."
