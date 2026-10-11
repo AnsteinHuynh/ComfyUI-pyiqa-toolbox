@@ -1,0 +1,13 @@
+[project]
+name = "comfyui-pyiqa-toolbox"
+description = "ComfyUI nodes wrapping pyiqa (IQA-Pytorch) quality metrics - loader + score nodes per architecture family (Q-ReAlign, FGResQ, ...)."
+version = "0.1.0"
+license = {text = "MIT"}
+dependencies = ["pyiqa>=0.1.15", "transformers>=5.0"]
+
+[project.urls]
+Repository = "https://github.com/AnsteinHuynh/ComfyUI-pyiqa-toolbox"
+
+[tool.comfy]
+DisplayName = "ComfyUI-pyiqa-toolbox"
+PublisherId = "AnsteinHuynh"
