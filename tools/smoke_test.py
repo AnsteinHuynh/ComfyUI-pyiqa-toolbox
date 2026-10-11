@@ -168,6 +168,12 @@ def main():
     q_opts = pack.NODE_CLASS_MAPPINGS["QReAlignLoader"].INPUT_TYPES()["required"][
         "model_name"
     ][0]
+    q_inputs = set(
+        pack.NODE_CLASS_MAPPINGS["QReAlignLoader"].INPUT_TYPES()["required"]
+    )
+    assert q_inputs == {"model_name", "dtype"}, (
+        f"QReAlignLoader must stay a plain model_name+dtype loader, got {q_inputs}"
+    )
     print("QReAlign model_name options:", q_opts)
     from pyiqa_toolbox_smoke.nodes.qrealign_nodes import QREALIGN_VARIANTS
 
@@ -244,8 +250,7 @@ def main():
 
     print("\n-- QReAlign (mini) --")
     (qmodel,) = pack.NODE_CLASS_MAPPINGS["QReAlignLoader"]().load(
-        "qrealign-mini-0.8B", "auto", "none (native)",
-        "AnsteinHuynh/Q-ReAlign-int8-convrot"
+        "qrealign-mini-0.8B", "auto"
     )
     (qscores,) = pack.NODE_CLASS_MAPPINGS["QReAlignScore"]().score(
         qmodel, image, "quality IQA"

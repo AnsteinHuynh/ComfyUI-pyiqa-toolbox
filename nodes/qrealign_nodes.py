@@ -82,8 +82,8 @@ def _builtin_resolved_paths():
 def _custom_options():
     # snapshot-style dirs (config.json present); skip names shadowing built-ins
     # by label (case-insensitive), built-ins' own resolved paths, and this
-    # pack's int8_convrot folders (those are selected via the quantization
-    # combo, not as customs).
+    # pack's int8_convrot folders (those are the "(int8_convrot)" dropdown
+    # entries, not customs).
     builtin_labels = {label.lower() for label in QREALIGN_VARIANTS}
     builtin_folders = {folder.lower() for _, _, folder in QREALIGN_VARIANTS.values()}
     return [
@@ -108,10 +108,14 @@ def _resolve_model_arg(label):
     return local if local is not None else repo
 
 
-INT8_QUANT = "int8_convrot"
 INT8_SUFFIX = "-int8-convrot"
 INT8_LABEL_SUFFIX = " (int8_convrot)"
 DEFAULT_INT8_REPO = "AnsteinHuynh/Q-ReAlign-int8-convrot"
+
+
+def _int8_repo():
+    """int8 download repo: the default release repo, env-overridable."""
+    return os.environ.get("PYIQA_TOOLBOX_INT8_REPO", DEFAULT_INT8_REPO)
 
 
 def _int8_variant_base(label):
@@ -226,35 +230,8 @@ class QReAlignLoader:
                         "default": "auto",
                         "tooltip": (
                             "torch dtype passed to from_pretrained. 'auto' follows the checkpoint "
-                            "(bfloat16). Ignored when quantization is int8_convrot (weights are "
+                            "(bfloat16). Ignored for the (int8_convrot) entries (weights are "
                             "already int8 with bf16 compute)."
-                        ),
-                    },
-                ),
-                "quantization": (
-                    ["none (native)", INT8_QUANT],
-                    {
-                        "default": "none (native)",
-                        "tooltip": (
-                            "none (native) = the original bf16 weights. int8_convrot = ComfyUI's "
-                            "native int8_tensorwise + ConvRot format (group-256 Hadamard rotation; "
-                            "same recipe as Comfy-Org's official int8_convrot text encoders): about "
-                            "a third less download/disk/VRAM, small score drift vs bf16. Resolved from "
-                            "models/pyiqa first, else downloaded from the repo below. Note: an "
-                            "int8 model always stays on the GPU (the score node's "
-                            "'free_after_score' is a no-op for it)."
-                        ),
-                    },
-                ),
-                "int8_hf_repo": (
-                    "STRING",
-                    {
-                        "default": DEFAULT_INT8_REPO,
-                        "tooltip": (
-                            "HuggingFace repo holding the int8_convrot variants as folders "
-                            "(Q-ReAlign-Mini-0.8B-int8-convrot/ etc.), one folder per variant at "
-                            "the repo root. Only used when quantization is int8_convrot and no "
-                            "local copy exists."
                         ),
                     },
                 ),
@@ -269,13 +246,16 @@ class QReAlignLoader:
     FREE_COMFY_MEMORY = True  # pro-9B is huge; free the SDXL cache first
     FUNCTION = "load"
 
-    def load(self, model_name, dtype, quantization, int8_hf_repo):
+    def load(self, model_name, dtype):
         device = default_device()
         _require_transformers_v5()
         int8_base = _int8_variant_base(model_name)
 
-        if quantization == INT8_QUANT or int8_base is not None:
-            int8_dir = _resolve_int8_dir(int8_base or model_name, int8_hf_repo)
+        if int8_base is not None:
+            # the download repo is not a node input on purpose - two extra
+            # combos on a loader scare people off; override with the
+            # PYIQA_TOOLBOX_INT8_REPO env var if you fork the weights
+            int8_dir = _resolve_int8_dir(int8_base, _int8_repo())
 
             def factory():
                 make_room_for_metric(device)

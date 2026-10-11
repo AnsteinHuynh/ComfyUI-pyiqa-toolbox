@@ -18,7 +18,7 @@ node loads its inputs lazily — see *Lazy evaluation* below.
 
 | Family / node | Inputs | Outputs | Direction / range | Order |
 |---|---|---|---|---|
-| **QReAlign** Loader | model_name (mini-0.8B / lite-4B / pro-9B, each also as an int8_convrot entry, + customs), dtype, quantization (none (native) / int8_convrot), int8_hf_repo | model | — | — |
+| **QReAlign** Loader | model_name (mini-0.8B / lite-4B / pro-9B, each also as an int8_convrot entry, + customs), dtype | model | — | — |
 | QReAlign NR Score | model, image, task (quality IQA / aesthetic IAA) | score | 0-1, higher better | NR |
 | **FGResQ** Loader | checkpoint ((default) + customs) | model | — | — |
 | FGResQ NR Score | model, image | score | 0-1, higher better | NR |
@@ -121,18 +121,21 @@ loader needs the space (which evicts it, reloading from disk next score). Use
 
 ## int8_convrot Q-ReAlign (a third less size and VRAM)
 
-The QReAlign Loader has a `quantization` combo. `int8_convrot` loads a quantized
-copy of the model in ComfyUI's **native int8_tensorwise + ConvRot** format — the
-same recipe as Comfy-Org's official int8_convrot text encoders (per-channel int8
-weights with a group-256 Hadamard rotation applied to weights *and* activations,
-so int8 matmuls run on tensor cores without an accuracy cliff). The rotation and
-the int8 matmul are handled entirely by ComfyUI's tensor-subclass dispatch
-(`comfy.quant_ops` + `comfy_kitchen`) — the model's forward is untouched.
+The QReAlign Loader's `model_name` dropdown lists each variant twice — e.g.
+`qrealign-mini-0.8B` and `qrealign-mini-0.8B (int8_convrot)`. The int8 entries
+load a quantized copy of the model in ComfyUI's **native int8_tensorwise +
+ConvRot** format — the same recipe as Comfy-Org's official int8_convrot text
+encoders (per-channel int8 weights with a group-256 Hadamard rotation applied
+to weights *and* activations, so int8 matmuls run on tensor cores without an
+accuracy cliff). The rotation and the int8 matmul are handled entirely by
+ComfyUI's tensor-subclass dispatch (`comfy.quant_ops` + `comfy_kitchen`) — the
+model's forward is untouched. That is the whole UI: no extra combos.
 
 - **Where:** resolved from the registered `pyiqa` folders as
-  `Q-ReAlign-<variant>-int8-convrot/`, else downloaded from the `int8_hf_repo`
-  input (default `AnsteinHuynh/Q-ReAlign-int8-convrot`, one variant folder per
-  repo root) via `snapshot_download`.
+  `Q-ReAlign-<variant>-int8-convrot/`, else downloaded from the release repo
+  (default `AnsteinHuynh/Q-ReAlign-int8-convrot`, one variant folder per repo
+  root; override with the `PYIQA_TOOLBOX_INT8_REPO` env var) via
+  `snapshot_download`.
 - **Sizes on this machine** (`I:/MyApps/ComfyUi/models/pyiqa/`): Pro 9B
   17.5 → 11.55 GiB, Lite 4B 9.7 → 6.28 GiB, Mini 0.8B 2.1 → 1.56 GiB.
   Kept in bf16: `lm_head`, the visual merger, the linear-attention a/b gate
