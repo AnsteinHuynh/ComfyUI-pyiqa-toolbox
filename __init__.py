@@ -18,6 +18,7 @@ try:
     from .nodes.dists_nodes import DISTSFrScore, DISTSLoader
     from .nodes.fgresq_nodes import FGResQLoader, FGResQPairScore, FGResQScore
     from .nodes.fid_nodes import FIDLoader, FIDScore
+    from .nodes.laion_nodes import LAIONLoader, LAIONNRScore
     from .nodes.lpips_nodes import LPIPSFrScore, LPIPSLoader
     from .nodes.musiq_nodes import MUSIQLoader, MUSIQNRScore
     from .nodes.qrealign_nodes import QReAlignLoader, QReAlignScore
@@ -65,6 +66,8 @@ try:
             },
             "FIDLoader": {"class": FIDLoader, "name": "FID Loader"},
             "FIDScore": {"class": FIDScore, "name": "FID Score"},
+            "LAIONLoader": {"class": LAIONLoader, "name": "LAION Aesthetic Loader"},
+            "LAIONNRScore": {"class": LAIONNRScore, "name": "LAION Aesthetic Score"},
             "UnloadPyiqaModels": {
                 "class": UnloadPyiqaModels,
                 "name": "Unload Pyiqa Models",

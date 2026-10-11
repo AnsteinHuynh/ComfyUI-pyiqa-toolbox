@@ -1,10 +1,14 @@
 """Classic full-reference metric nodes: ssim, ssimc, ms_ssim, fsim, psnr,
-psnry, mad — plus this pack's own L1 node.
+psnry, mad, gmsd, vif, vsi, cw_ssim — plus this pack's own L1 node.
 
 All classic metrics are wrapped via ``pyiqa.create_metric(name)`` with the
 registry's own default options (ssim/ms_ssim use the Y channel, fsim is
 chromatic, psnry is Y-channel PSNR), so scores match the library exactly.
 These metrics carry no weights, so the loader is instant.
+
+Measured order behaviour (f(a,b) vs f(b,a)): everything is exactly symmetric
+except vif (~1.5%: its variance model treats reference and distortion sides
+differently).
 
 L1 is NOT a pyiqa metric (the registry has no l1; the nearest is mad) — the
 L1 Score node is this pack's own convenience node and is marked as such.
@@ -16,6 +20,7 @@ import pyiqa
 from pyiqa.losses.losses import L1Loss
 
 from ..utility.pyiqa_utils import (
+    ORDER_NEAR_SYMMETRIC,
     ORDER_SYMMETRIC,
     TARGET_TOOLTIP,
     comfy_image_to_pyiqa,
@@ -33,8 +38,24 @@ from ._common import (
     lazy_image_opt,
 )
 
-CLASSIC_FR_METRICS = ["ssim", "ssimc", "ms_ssim", "fsim", "psnr", "psnry", "mad"]
-LOWER_BETTER = {"mad"}
+CLASSIC_FR_METRICS = [
+    "ssim",
+    "ssimc",
+    "ms_ssim",
+    "fsim",
+    "psnr",
+    "psnry",
+    "mad",
+    "gmsd",
+    "vif",
+    "vsi",
+    "cw_ssim",
+]
+LOWER_BETTER = {"mad", "gmsd"}
+# per-metric order hint for the reference tooltip (vif is measured ~1.5%
+# order-sensitive; everything else exactly symmetric)
+ORDER_HINTS = {"vif": ORDER_NEAR_SYMMETRIC}
+_DEFAULT_ORDER_HINT = ORDER_SYMMETRIC
 
 # pyiqa ships L1 as a loss (pyiqa.losses.losses.L1Loss), not as a registry
 # metric — the L1 node uses that implementation directly.
@@ -61,8 +82,12 @@ class ClassicFRLoader:
                         "tooltip": (
                             "Weightless FR metrics, exactly as pyiqa registers them: "
                             "ssim (Y channel), ssimc (RGB), ms_ssim (Y channel, prod pooling), "
-                            "fsim (chromatic on), psnr (RGB) / psnry (Y channel), mad. "
-                            "Higher is better for all except mad (lower is better)."
+                            "fsim (chromatic on), psnr (RGB) / psnry (Y channel), mad, "
+                            "gmsd (gradient-magnitude similarity deviation), vif (visual "
+                            "information fidelity), vsi (visual saliency-induced index), "
+                            "cw_ssim (complex-wavelet SSIM). Higher is better except mad "
+                            "and gmsd (lower is better). vif is mildly order-sensitive; "
+                            "the rest are exactly symmetric."
                         ),
                     },
                 ),
@@ -93,10 +118,18 @@ class ClassicFRScore(LazyScoreMixin):
     CATEGORY = "pyiqa/Classic FR"
     DESCRIPTION = (
         "Scores the target against the reference with a classic FR metric "
-        "(ssim/ssimc/ms_ssim/fsim/psnr/psnry/mad), using pyiqa's registered "
-        "defaults."
+        "(ssim/ssimc/ms_ssim/fsim/psnr/psnry/mad/gmsd/vif/vsi/cw_ssim), using "
+        "pyiqa's registered defaults."
     )
     LAZY_INPUTS = ("target", "reference", "model")
+
+    # all metrics here are exactly order-symmetric except vif (~1.5%),
+    # so one tooltip covers both facts
+    _REF_TOOLTIP = (
+        "Reference image (the pristine original), paired by batch index. "
+        "Order-independent for every metric here except vif, whose variance "
+        "model treats the two sides differently (about 1.5% when swapped)."
+    )
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -105,10 +138,7 @@ class ClassicFRScore(LazyScoreMixin):
                 "memory_management": MEMORY_MANAGEMENT_INPUT,
                 "model": ("PYIQA_CLASSIC_FR", dict(LAZY_MODEL_OPT)),
                 "target": ("IMAGE", lazy_image_opt(TARGET_TOOLTIP)),
-                "reference": (
-                    "IMAGE",
-                    lazy_image_opt(reference_tooltip(ORDER_SYMMETRIC)),
-                ),
+                "reference": ("IMAGE", lazy_image_opt(cls._REF_TOOLTIP)),
             }
         }
 

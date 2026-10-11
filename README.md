@@ -23,9 +23,11 @@ node loads its inputs lazily — see *Lazy evaluation* below.
 | **FGResQ** Loader | checkpoint ((default) + customs) | model | — | — |
 | FGResQ NR Score | model, image | score | 0-1, higher better | NR |
 | FGResQ FR Score | model, target, reference | target_score, reference_score, rank (INT 0=reference better / 1=target better / 2=similar), verdict (STRING), rank_prob | 0-1 | **order-sensitive** |
-| **TOPIQ** Loader | model_name (topiq_fr/-pipal, topiq_nr/-flive/-spaq, + 3 face variants, + customs) | model | — | — |
+| **TOPIQ** Loader | model_name (topiq_fr/-pipal, topiq_nr/-flive/-spaq, + 3 face variants, + iaa aesthetic heads, + customs) | model | — | — |
 | TOPIQ FR Score | model, target, reference | score | ~0-1, higher better | **order-sensitive** |
-| TOPIQ NR Score | model, image | score | ~0-1, higher better | NR |
+| TOPIQ NR Score | model, image | score | ~0-1, higher better (iaa heads 1-10) | NR |
+| **LAION Aesthetic** Loader | metric (laion_aes + customs) | model | — | — |
+| LAION Aesthetic Score | model, image | score | ~1-10, higher better (batch cherry-picking) | NR |
 | **A-FINE** Loader | metric (afine_fr/afine_nr + customs) | model | — | — |
 | A-FINE FR Score | model, target, reference, resolution | score | **lower better**, ~-2..2 | order-independent |
 | A-FINE NR Score | model, image, resolution | score | **lower better**, ~-2..2 | NR |
@@ -42,8 +44,8 @@ node loads its inputs lazily — see *Lazy evaluation* below.
 | LPIPS FR Score | model, target, reference | score | **lower better**, 0-1 | lpips/stlpips exact; lpips+ ~0.1% |
 | **DISTS** Loader | metric (dists, msswd + customs) | model | — | — |
 | DISTS FR Score | model, target, reference | score | **lower better**; dists 0-1, msswd 0-~10 | order-independent |
-| **Classic FR** Loader | metric (ssim, ssimc, ms_ssim, fsim, psnr, psnry, mad) | model | — | — |
-| Classic FR Score | model, target, reference | score | higher better except mad | order-independent |
+| **Classic FR** Loader | metric (ssim, ssimc, ms_ssim, fsim, psnr, psnry, mad, gmsd, vif, vsi, cw_ssim) | model | — | — |
+| Classic FR Score | model, target, reference | score | higher better except mad, gmsd | order-independent except vif (~1.5%) |
 | L1 Score | target, reference | score | mean abs error, lower better | order-independent |
 | **FID** Loader | metric (fid, sfid) | model | — | — |
 | FID Score | model, target (IMAGE set), reference (IMAGE set), resize_mode | score (one value) | **lower better**, unbounded | set-level |
@@ -57,9 +59,10 @@ also takes a `memory_management` combo (see below).
 **Order sensitivity in the table above is MEASURED**, not assumed: each FR
 metric was scored as f(a,b) vs f(b,a) on identical inputs. Order-sensitive:
 FGResQ FR (its rank label and the two per-side scores swap), TOPIQ FR (~0.8%),
-WaDIQaM FR (~2%). Nominal-but-tiny (~0.1%): lpips+, lpips-vgg+. Everything
-else, including A-FINE FR despite its "you cannot switch dis/ref" docstring, is
-exactly order-independent.
+WaDIQaM FR (~2%), vif (~1.5%: its variance model treats the two sides
+differently). Nominal-but-tiny (~0.1%): lpips+, lpips-vgg+. Everything
+else, including A-FINE FR despite its "you cannot switch dis/ref" docstring and
+the newly added gmsd/vsi/cw_ssim, is exactly order-independent.
 
 **FR inputs are `target` + `reference`** (pyiqa's argument order). Score
 outputs are per-image/per-pair lists (`OUTPUT_IS_LIST`), so each value flows

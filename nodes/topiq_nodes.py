@@ -23,6 +23,8 @@ BUILTIN_VARIANTS = [
     "topiq_nr-face",
     "topiq_nr_swin-face",
     "topiq_nr-face-v1",
+    "topiq_iaa",
+    "topiq_iaa_res50",
 ]
 
 
@@ -40,8 +42,11 @@ class TOPIQLoader(FamilyLoaderBase):
         "topiq_fr (KADID-10k) and topiq_fr-pipal are FULL-reference "
         "(and order-sensitive); topiq_nr (KonIQ), -flive, -spaq are "
         "NO-reference. topiq_nr-face / -swin-face / -face-v1 are GFIQA face "
-        "models (run face alignment internally; expect face crops). Range "
-        "~0-1, higher is better. Weights auto-download on first use."
+        "models (run face alignment internally; expect face crops). "
+        "topiq_iaa / topiq_iaa_res50 are AESTHETIC heads (AVA-trained, "
+        "1-10, higher is better) - use them with TOPIQ NR Score. Range "
+        "~0-1 for quality heads, higher is better. Weights auto-download "
+        "on first use."
     )
     CUSTOM_PATTERNS = ("*topiq*.pth", "cfanet*.pth")
     DEFAULT_WEIGHTS = "pyiqa.archs.topiq_arch"

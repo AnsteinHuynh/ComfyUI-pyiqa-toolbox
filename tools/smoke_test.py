@@ -265,7 +265,10 @@ def main():
     print(f"post-unload NR scores={[round(s, 4) for s in post_scores]} (unchanged)")
 
     print("\n-- Classic FR --")
-    for metric, expect in [("ssim", 1.0), ("ms_ssim", 1.0), ("fsim", 1.0), ("mad", 0.0)]:
+    for metric, expect in [
+        ("ssim", 1.0), ("ms_ssim", 1.0), ("fsim", 1.0), ("mad", 0.0),
+        ("gmsd", 0.0), ("vif", 1.0), ("vsi", 1.0), ("cw_ssim", 1.0),
+    ]:
         (m,) = pack.NODE_CLASS_MAPPINGS["ClassicFRLoader"]().load(metric)
         (s,) = pack.NODE_CLASS_MAPPINGS["ClassicFRScore"]().score(m, image, image)
         assert abs(s[0] - expect) < 1e-3, f"{metric}(a,a) = {s[0]}, expected ~{expect}"
@@ -326,6 +329,12 @@ def main():
         (noise,) = pack.NODE_CLASS_MAPPINGS["DISTSFrScore"]().score(dm, image, image2)
         assert abs(ident[0]) < 1e-4, f"{label} identity = {ident[0]}, expected ~0"
         print(f"{label:24s} identity={ident[0]:.5f} noise-pair={noise[0]:.4f}")
+
+    print("\n-- LAION Aesthetic --")
+    (lm,) = pack.NODE_CLASS_MAPPINGS["LAIONLoader"]().load("laion_aes (improved aesthetic predictor)", "(none)", None)
+    (ls,) = pack.NODE_CLASS_MAPPINGS["LAIONNRScore"]().score(lm, image)
+    assert 0 < ls[0] <= 12, f"laion_aes score {ls[0]} outside ~1-10 band"
+    print(f"laion_aes image={ls[0]:.3f}")
 
     print("\n-- WaDIQaM --")
     (wf,) = pack.NODE_CLASS_MAPPINGS["WaDIQaMLoader"]().load(
@@ -393,6 +402,7 @@ def main():
         "required"
     ]["model_name"][0]
     assert "topiq_nr-face" in face_variants and "topiq_nr_swin-face" in face_variants
+    assert "topiq_iaa" in face_variants and "topiq_iaa_res50" in face_variants
 
     print("\n-- output tooltips + FR input names --")
     for node_id, cls in sorted(pack.NODE_CLASS_MAPPINGS.items()):
