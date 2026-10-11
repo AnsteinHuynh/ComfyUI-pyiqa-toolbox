@@ -29,6 +29,9 @@ class DISTSLoader(FamilyLoaderBase):
     )
     CUSTOM_PATTERNS = ("*dists*.pth", "*msswd*.pth")
     DEFAULT_WEIGHTS = "pyiqa.archs.dists_arch"
+    # msswd_arch has no default_model_urls table, so its auto-downloaded
+    # msswd_weights.pth cannot be excluded via DEFAULT_WEIGHTS - hardcode it
+    CUSTOM_WEIGHT_EXCLUDES = {"msswd_weights.pth"}
     DESCRIPTION = (
         "Loads DISTS (deep structure/texture distance, range 0-1) or MS-SWD "
         "(learned multi-scale Sliced-Wasserstein, 0-~10). Both FR, LOWER is "

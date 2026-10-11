@@ -169,6 +169,9 @@ class FamilyLoaderBase:
     VARIANT_MAP = {}
     METRIC_TOOLTIP = ""
     CUSTOM_PATTERNS = ()
+    # extra default-weight basenames to hide from the custom scan, for arches
+    # whose defaults cannot be derived from a default_model_urls table
+    CUSTOM_WEIGHT_EXCLUDES = frozenset()
     DEFAULT_WEIGHTS = None
     METRIC_INPUT_NAME = "metric"
     CUSTOM_BASE_INPUT_NAME = "custom_base_metric"
@@ -227,7 +230,9 @@ class FamilyLoaderBase:
             options.extend(
                 list_pyiqa_checkpoints(
                     pattern,
-                    exclude_names=cls._default_weight_basenames(),
+                    exclude_names=(
+                        cls._default_weight_basenames() | set(cls.CUSTOM_WEIGHT_EXCLUDES)
+                    ),
                     exclude_paths=cls._custom_exclude_paths(),
                 )
             )

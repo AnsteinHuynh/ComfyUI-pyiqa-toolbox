@@ -117,7 +117,7 @@ case, or put a single `Unload Pyiqa Models` node at the end instead.
 are CUDA-only; a CPU detour silently corrupts the values), so `free_after_score`
 and Unload Models are no-ops for an int8 model: it keeps its VRAM until another
 loader needs the space (which evicts it, reloading from disk next score). Use
-`none (native)` bf16 if you need full eviction.
+Use the plain (bf16) entry instead if you need full eviction.
 
 ## int8_convrot Q-ReAlign (a third less size and VRAM)
 
@@ -189,7 +189,7 @@ are. It returns ONE score for the two sets (not per image) and needs >= 2 images
 per side (>= ~16 to be meaningful). `resize_mode` is pyiqa's own
 clean / legacy_pytorch / legacy_tensorflow.
 
-References: Q-Align (arXiv:2312.17090) / Q-ReAlign; FGResQ (AAAI 2026,
+References: Q-Align (arXiv:2312.17009) / Q-ReAlign; FGResQ (AAAI 2026,
 <https://github.com/sxfly99/FGResQ>); TOPIQ (AAAI 2023, CFANet); A-FINE; MUSIQ
 (ICCV 2021); CLIP-IQA (AAAI 2023); QualiCLIP (2023); WaDIQaM (Bosse et al.);
 LPIPS (CVPR 2018) / ST-LPIPS; DISTS (ICLR 2021); FID / clean-FID.
@@ -263,7 +263,8 @@ the previous model of that family from VRAM.
   the version at load time and raises with the exact pip command to fix it.
 - `target` and `reference` must share a batch size in the pair node.
 - Future families slot in as new `nodes/*_nodes.py` files with their own
-  loader; fid/sfid will need folder-pair nodes instead of image inputs.
+  loader, subclassing the shared bases in `nodes/_common.py` (~40 lines of
+  variants + tooltips per family).
 - `l1` is not in pyiqa's metric registry, but pyiqa DOES ship
   `pyiqa.losses.losses.L1Loss` — the L1 Score node uses that class directly
   (pyiqa implements L1 as a loss; the registry's nearest metric is `mad`).
