@@ -307,9 +307,12 @@ def comfy_image_to_pyiqa(image, device):
     )
 
 
-# (family, metric) cache. Loading a new metric of the same family evicts the
-# previous one (e.g. switching qrealign mini -> pro frees the 0.8B model);
-# other families are kept so qrealign + fgresq can be wired together.
+# (family, key) -> (family, metric, factory). The factory is kept so a metric
+# that was fully unloaded (gut-and-drop) can be rebuilt transparently when a
+# cached node output turns out to be a hollow shell. Loading a new metric of
+# the same family evicts the previous one (e.g. switching qrealign mini -> pro
+# frees the 0.8B model); other families are kept so qrealign + fgresq can be
+# wired together.
 _METRIC_CACHE = {}
 
 
@@ -320,21 +323,93 @@ def get_cached_metric(family, key, factory):
     entry = (family, key)
     hit = _METRIC_CACHE.get(entry)
     if hit is not None:
-        # entries are stored as (family, metric) so the stale sweep can match on
-        # family; hand back the metric, not the bookkeeping tuple
-        return hit[1]
-    stale = [k for k, (f, _) in _METRIC_CACHE.items() if f == family and k != entry]
+        # a gutted entry is a tombstone from a full unload - rebuild it
+        if not getattr(hit[1], "_pyiqa_gutted", False):
+            return hit[1]
+        del _METRIC_CACHE[entry]
+    stale = [k for k, (f, _, _) in _METRIC_CACHE.items() if f == family and k != entry]
     for k in stale:
         # park the outgoing metric before dropping it: ComfyUI's node output
         # cache may still hold a reference, so a bare del would leave it on
-        # the GPU (release_metric is a no-op for int8 metrics by design)
+        # the GPU (release_metric itself collapses to a full drop for int8)
         release_metric(_METRIC_CACHE[k][1])
         del _METRIC_CACHE[k]
     if stale and torch.cuda.is_available():
         torch.cuda.empty_cache()
     metric = factory()
-    _METRIC_CACHE[entry] = (family, metric)
+    _METRIC_CACHE[entry] = (family, metric, factory)
     return metric
+
+
+def revive_metric(model):
+    """Rebuild a fully-unloaded (gutted) metric; identity pass-through else.
+
+    ComfyUI caches node outputs between prompts, so a score node can be handed
+    the loader's previous output - a hollow shell after a full unload. The
+    decorator revives through this before scoring.
+    """
+    if model is None or not getattr(model, "_pyiqa_gutted", False):
+        return model
+    for key, (family, m, factory) in list(_METRIC_CACHE.items()):
+        if m is model:
+            del _METRIC_CACHE[key]
+            logger.info(
+                "(pyiqa-toolbox) fully-unloaded metric rebuilt for the next "
+                "score (reload from disk)"
+            )
+            return get_cached_metric(family, key, factory)
+    raise RuntimeError(
+        "(pyiqa-toolbox) this model was fully unloaded and no loader recipe "
+        "remains for it - re-run the workflow with the loader node re-executed"
+    )
+
+
+def _gut(target):
+    """Replace every parameter and buffer with empty meta tensors, in place.
+
+    The object stays alive for anyone still referencing it (ComfyUI's output
+    cache), but holds no VRAM and no RAM - only the recipe to rebuild it.
+    """
+    for _, module in target.named_modules():
+        for attr in list(module._parameters):
+            module._parameters[attr] = torch.nn.Parameter(
+                torch.empty(0, device="meta"), requires_grad=False
+            )
+        for attr in list(module._buffers):
+            module._buffers[attr] = None
+    target._pyiqa_gutted = True
+
+
+def drop_metric(metric):
+    """Fully unload one metric: gone from VRAM and from system RAM.
+
+    The weights are gutted in place (so references held by ComfyUI's output
+    cache cost nothing), the cache entry becomes a rebuild tombstone, and the
+    CUDA cache is flushed. The next score reloads from disk.
+    """
+    if metric is None:
+        return False
+    target = (
+        metric if isinstance(metric, torch.nn.Module) else getattr(metric, "metric", metric)
+    )
+    already = getattr(metric, "_pyiqa_gutted", False) or getattr(
+        target, "_pyiqa_gutted", False
+    )
+    if not already:
+        try:
+            _gut(target)
+        except Exception as exc:  # never break a score over cleanup
+            logger.debug("drop_metric gut failed: %s", exc)
+            return False
+        metric._pyiqa_gutted = True
+        logger.info(
+            "(pyiqa-toolbox) metric fully unloaded (VRAM + RAM freed; "
+            "reloads from disk on the next score)"
+        )
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return True
 
 
 def _metric_marker(metric):
@@ -409,15 +484,20 @@ def offload_metric_cache():
 
     Matches ComfyUI's own unload semantics (models are offloaded to system
     RAM, not deleted), so the metrics stay warm and are moved back onto the
-    GPU by ``ensure_on_device`` on the next score/loader call.
+    GPU by ``ensure_on_device`` on the next score/loader call. int8 metrics
+    cannot be parked (see ``_has_quantized_params``), so they are fully
+    unloaded instead - the consistent collapse rule everywhere in this pack.
     """
     moved = []
-    for family, (_, metric) in list(_METRIC_CACHE.items()):
+    for key, (family, metric, _factory) in list(_METRIC_CACHE.items()):
+        if getattr(metric, "_pyiqa_gutted", False):
+            continue  # tombstone from a previous full unload
         if _has_quantized_params(metric):
             logger.info(
-                "(pyiqa-toolbox) %s is int8_convrot; it stays on the GPU "
-                "(CPU parking is unsafe for ComfyUI int8 tensors)", family
+                "(pyiqa-toolbox) %s is int8_convrot and cannot be parked in "
+                "RAM; fully unloading it instead", family
             )
+            drop_metric(metric)
             continue
         try:
             metric.to(torch.device("cpu"))
@@ -432,6 +512,19 @@ def offload_metric_cache():
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+
+def evict_metric_cache(fully=True):
+    """The Unload Pyiqa Models node's action: release every cached metric.
+
+    fully=True drops each metric from VRAM and RAM (reload from disk next
+    score); fully=False parks them in system RAM (int8 collapses to a drop).
+    """
+    if not fully:
+        return offload_metric_cache()
+    for _key, (_family, metric, _factory) in list(_METRIC_CACHE.items()):
+        if not getattr(metric, "_pyiqa_gutted", False):
+            drop_metric(metric)
 
 
 def ensure_on_device(metric, device=None):
@@ -463,18 +556,19 @@ def ensure_on_device(metric, device=None):
 def release_metric(metric):
     """Park one metric in system RAM and hand its VRAM back to the allocator.
 
-    Used by the score nodes' ``free_after_score`` mode so the next generation
-    gets full VRAM; the metric is reloaded lazily (``ensure_on_device``) on the
-    next score. Returns True if the offload happened. int8_convrot metrics are
-    skipped (returned False) - their QuantizedTensor weights cannot be parked
-    on the CPU, so they stay on the GPU until evicted.
+    Used by the score nodes' ``free VRAM (park in RAM)`` mode so the next
+    generation gets full VRAM; the metric is reloaded lazily (``ensure_on_device``)
+    on the next score. int8_convrot metrics cannot be parked - CPU residency
+    silently corrupts their values - so they collapse to a FULL unload
+    (``drop_metric``): VRAM and RAM freed, reload from disk next score.
+    Returns True if the metric is no longer on the GPU.
     """
     if _has_quantized_params(metric):
         logger.info(
-            "(pyiqa-toolbox) int8_convrot metric stays on the GPU "
-            "(free_after_score is a no-op for it)"
+            "(pyiqa-toolbox) int8_convrot metric cannot be parked in RAM; "
+            "fully unloading it instead (reloads from disk next score)"
         )
-        return False
+        return drop_metric(metric)
     try:
         metric.to(torch.device("cpu"))
         _sync_quantized_scales(metric, torch.device("cpu"))

@@ -15,6 +15,7 @@ Design notes:
 
 import functools
 import importlib
+import inspect
 import os
 
 import pyiqa
@@ -24,56 +25,72 @@ from ..utility.pyiqa_utils import (
     TARGET_TOOLTIP,
     comfy_image_to_pyiqa,
     default_device,
+    drop_metric,
     ensure_on_device,
     get_cached_metric,
     list_pyiqa_checkpoints,
     make_room_for_metric,
     reference_tooltip,
     release_metric,
+    revive_metric,
 )
 
 
-# Memory handling for the metric after scoring.
-MEMORY_FREE = "free_after_score"
-MEMORY_KEEP = "keep_loaded"
+# Memory handling for the metric after scoring. Three modes, one law each:
+MEMORY_KEEP = "keep loaded"
+MEMORY_PARK = "free VRAM (park in RAM)"
+MEMORY_DROP = "free VRAM + RAM (fully unload)"
 
 MEMORY_MANAGEMENT_INPUT = (
-    [MEMORY_FREE, MEMORY_KEEP],
+    [MEMORY_PARK, MEMORY_DROP, MEMORY_KEEP],
     {
-        "default": MEMORY_FREE,
+        "default": MEMORY_PARK,
         "tooltip": (
-            "What happens to this metric after it scores. 'free_after_score' "
-            "parks it in system RAM and releases its VRAM, so the next "
-            "generation has the whole card (it is reloaded automatically on the "
-            "next score - keep the weights on a fast disk). 'keep_loaded' leaves "
-            "it on the GPU: fastest to re-score, but it holds its VRAM between "
-            "runs. Note: with several score nodes sharing one loader, "
-            "'free_after_score' on each makes the shared model bounce GPU<->RAM "
-            "between them. int8_convrot Q-ReAlign models cannot be parked in RAM "
-            "at all - 'free_after_score' is a no-op for them (they stay on the "
-            "GPU until evicted by the next loader that needs the VRAM)."
+            "What happens to this metric after it scores. "
+            "'free VRAM (park in RAM)': hands the VRAM back and keeps the "
+            "model warm in system RAM - ~2s to restore on the next score. "
+            "'free VRAM + RAM (fully unload)': the metric is gone from VRAM "
+            "AND RAM (only the file on disk remains) - the next score "
+            "reloads it (seconds for small models, ~30s for Q-ReAlign Pro). "
+            "'keep loaded': stays on the GPU, fastest to re-score, holds its "
+            "VRAM between runs. int8_convrot models can never be parked in "
+            "RAM (CPU residency silently corrupts their scores), so the park "
+            "mode fully unloads them instead. With several score nodes "
+            "sharing one loader, only free on the LAST one - earlier nodes "
+            "should 'keep loaded' or you pay a reload between them."
         ),
     },
 )
 
 
 def with_memory_management(fn):
-    """Apply the node's ``memory_management`` choice after a score runs.
+    """Apply the node's ``memory_management`` choice around a score.
 
     A decorator (rather than an edit inside every score body) so the behavior
-    is uniform across all score nodes: read the mode from the inputs, then
-    release the metric to CPU when the mode asks for it.
+    is uniform across all score nodes. Before the score: a fully-unloaded
+    (gutted) model handed over by ComfyUI's output cache is revived through
+    its cached recipe. After the score: park, drop, or nothing, per the mode.
     """
 
     @functools.wraps(fn)
     def wrapper(self, *args, **kwargs):
-        result = fn(self, *args, **kwargs)
-        metric = kwargs.get("model")
-        if metric is None and args:
-            metric = args[0]
-        mode = kwargs.get("memory_management", MEMORY_FREE)
-        if metric is not None and mode == MEMORY_FREE:
-            release_metric(metric)
+        bound = inspect.signature(fn).bind(self, *args, **kwargs)
+        extra = bound.arguments.get("kwargs", {})
+        model = bound.arguments.get("model")
+        if model is not None:
+            revived = revive_metric(model)
+            if revived is not model:
+                bound.arguments["model"] = revived
+        result = fn(*bound.args, **bound.kwargs)
+        mode = bound.arguments.get("memory_management") or extra.get(
+            "memory_management", MEMORY_PARK
+        )
+        acted = bound.arguments.get("model") or model
+        if acted is not None and getattr(acted, "_pyiqa_gutted", False) is False:
+            if mode == MEMORY_DROP:
+                drop_metric(acted)
+            elif mode != MEMORY_KEEP:
+                release_metric(acted)
         return result
 
     return wrapper

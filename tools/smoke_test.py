@@ -427,8 +427,9 @@ def main():
 
     print("\n-- lazy evaluation wiring --")
     from pyiqa_toolbox_smoke.nodes._common import (
-        MEMORY_FREE,
+        MEMORY_DROP,
         MEMORY_KEEP,
+        MEMORY_PARK,
         LazyScoreMixin,
         with_memory_management,
     )
@@ -448,12 +449,13 @@ def main():
             )
         # no non-standard 'enabled' toggle
         assert "enabled" not in inputs, f"{node_id} still exposes 'enabled'"
-        # memory_management on every node that owns a metric, defaulting to free
+        # memory_management on every node that owns a metric, defaulting to park
         if "model" in inputs:
             mm = inputs.get("memory_management")
             assert mm is not None, f"{node_id} has no memory_management input"
-            assert mm[1].get("default") == MEMORY_FREE, node_id
-            assert mm[0][0] == MEMORY_FREE, node_id
+            assert mm[1].get("default") == MEMORY_PARK, node_id
+            assert mm[0][0] == MEMORY_PARK, node_id
+            assert set(mm[0]) == {MEMORY_PARK, MEMORY_DROP, MEMORY_KEEP}, node_id
     print(f"all {score_nodes} score nodes: check_lazy_status + lazy inputs + "
           f"memory_management (no 'enabled' toggle)")
 
@@ -475,7 +477,7 @@ def main():
     print("nodes return empty outputs when lazy inputs are absent")
 
     # the memory_management decorator: keep_loaded leaves the metric put,
-    # free_after_score routes it through release_metric (to CPU)
+    # park routes it through release_metric (to CPU), drop guts it in place
     import torch as _torch
 
     class _Metric:
@@ -496,9 +498,25 @@ def main():
     assert node.score(model=kept, memory_management=MEMORY_KEEP) == ("ran",)
     assert kept.device.type == "cuda", kept.device
     freed = _Metric()
-    node.score(model=freed, memory_management=MEMORY_FREE)
+    node.score(model=freed, memory_management=MEMORY_PARK)
     assert freed.device.type == "cpu", freed.device
-    print("memory_management: keep_loaded leaves it, free_after_score parks it")
+    print("memory_management: keep_loaded leaves it, park frees the VRAM")
+
+    # full-unload (gut-and-drop) end to end on a real family metric: score,
+    # drop, then score AGAIN with the same (now hollow) object - the decorator
+    # must revive it and reproduce the same numbers
+    (sm,) = pack.NODE_CLASS_MAPPINGS["ClassicFRLoader"]().load("ssim")
+    snode = pack.NODE_CLASS_MAPPINGS["ClassicFRScore"]()
+    (before,) = snode.score(sm, image, image)
+    snode.score(sm, image, image, memory_management=MEMORY_DROP)
+    gutted = getattr(sm, "_pyiqa_gutted", False)
+    (after,) = snode.score(sm, image, image)  # revives through the recipe
+    assert gutted, "drop mode did not gut the metric"
+    assert before == after, f"revived metric scores differ: {before} vs {after}"
+    print(
+        "full unload: metric gutted (VRAM+RAM freed), revival reproduces "
+        f"score {before[0]:.4f}"
+    )
 
     print("\n-- custom checkpoint discovery --")
     customs = utils.list_pyiqa_checkpoints("FGResQ*.pth")

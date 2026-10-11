@@ -49,7 +49,7 @@ node loads its inputs lazily — see *Lazy evaluation* below.
 | L1 Score | target, reference | score | mean abs error, lower better | order-independent |
 | **FID** Loader | metric (fid, sfid) | model | — | — |
 | FID Score | model, target (IMAGE set), reference (IMAGE set), resize_mode | score (one value) | **lower better**, unbounded | set-level |
-| Unload Pyiqa Models | unload_pyiqa_models, empty_cuda_cache, passthrough (any) | passthrough | releases cached metrics to RAM | — |
+| Unload Pyiqa Models | mode (fully unload / park in RAM), empty_cuda_cache, passthrough (any) | passthrough | releases cached metrics (VRAM, or VRAM+RAM) | — |
 
 Nodes are grouped by family in the Add-Node menu (`pyiqa/<Family>`), one loader
 per family with its score node(s) beside it, plus `pyiqa/Utilities`. Display
@@ -98,29 +98,36 @@ loading one of its own models — so scoring right after a generation does not O
 against a still-resident SDXL checkpoint. ComfyUI reloads its models on demand
 on the next run.
 
-**Releasing VRAM after a score** — `memory_management` (every score node).
+**Releasing memory after a score** — `memory_management` (every score node).
 Because our metric is invisible to ComfyUI, ComfyUI will never free *its* VRAM;
 without help it sits on the card and the next generation can OOM against it.
-Each score node therefore takes a `memory_management` combo:
+Each score node therefore takes a `memory_management` combo with three strict
+modes — memory management is deliberately the user's job, so each mode does
+exactly what its label says, immediately, no cleverness:
 
-- `free_after_score` (default) — after scoring, park the metric in system RAM,
-  `gc.collect()`, and `torch.cuda.empty_cache()`. The next generation gets the
-  whole card; the metric reloads automatically (lazily) on the next score — keep
-  its weights on a fast disk.
-- `keep_loaded` — leave the metric on the GPU. Fastest to re-score, but it holds
-  its VRAM between runs.
+- `free VRAM (park in RAM)` (default) — after scoring, the metric moves to
+  system RAM and its VRAM is returned. Warm restore on the next score (~2 s).
+- `free VRAM + RAM (fully unload)` — after scoring, the metric is *gone*:
+  weights gutted in place, nothing left in VRAM or RAM, only the file on
+  disk. The next score reloads it (seconds for small models, ~30 s for
+  Q-ReAlign Pro). Re-queuing a workflow just works: if ComfyUI hands a score
+  node a previously-unloaded model, it is rebuilt transparently from its
+  cached recipe.
+- `keep loaded` — leave the metric on the GPU. Fastest to re-score, but it
+  holds its VRAM between runs.
 
-Caveat: when several score nodes share one loader (e.g. a QReAlign model feeding
-a quality and an aesthetic node), `free_after_score` on each makes the shared
-model bounce GPU↔RAM between them. Use `keep_loaded` on the earlier nodes in that
-case, or put a single `Unload Pyiqa Models` node at the end instead.
+**int8_convrot models can never be parked** — ComfyUI's int8 `QuantizedTensor`
+weights cannot round-trip through system RAM (the int8 kernels are CUDA-only;
+a CPU detour silently corrupts the scores), so for an int8 model the park mode
+collapses to a FULL unload: VRAM and RAM freed, reload from disk next score.
+`free VRAM + RAM` behaves identically to its label, and `keep loaded` is the
+only mode that keeps an int8 model warm.
 
-**int8_convrot Q-ReAlign models always stay on the GPU** — ComfyUI's int8
-`QuantizedTensor` weights cannot round-trip through system RAM (the int8 kernels
-are CUDA-only; a CPU detour silently corrupts the values), so `free_after_score`
-and Unload Models are no-ops for an int8 model: it keeps its VRAM until another
-loader needs the space (which evicts it, reloading from disk next score). Use
-Use the plain (bf16) entry instead if you need full eviction.
+Caveat: when several score nodes share one loader (e.g. a QReAlign model
+feeding a quality and an aesthetic node), a freeing mode on each makes the
+shared model reload or bounce between them. Use `keep loaded` on the earlier
+nodes in that case, or free only on the last one — or place a single
+`Unload Pyiqa Models` node at the end.
 
 ## int8_convrot Q-ReAlign (a third less size and VRAM)
 
@@ -170,12 +177,14 @@ model's forward is untouched. That is the whole UI: no extra combos.
   — that is the name the loader looks for after download.
 
 **Unload Pyiqa Models** (`pyiqa/Utilities`) — a passthrough node that releases
-the whole metric cache on demand (default `unload_pyiqa_models` +
-`empty_cuda_cache`, both True). Wire any value through it; the value is returned
-unchanged, so it can sit on the image wire before the score nodes or at the end
-of a pipeline. It touches only this pack's metrics — ComfyUI's own models are
-left to ComfyUI, and Edit > Unload Models still offloads everything (including
-ours).
+the whole metric cache on demand. Its `mode` combo mirrors the score nodes'
+choices: `fully unload (free VRAM + RAM)` (default — every metric gone from
+memory, reload from disk next score) or `park in RAM (free VRAM only)`; plus
+an `empty_cuda_cache` toggle. Wire any value through it; the value is returned
+unchanged, so it can sit on the image wire before the score nodes or at the
+end of a pipeline. It touches only this pack's metrics — ComfyUI's own models
+are left to ComfyUI, and Edit > Unload Models still offloads everything
+(including ours, parked to RAM the same way ComfyUI parks its own).
 
 **Resolution input (A-FINE):** AFINE needs sides divisible by 32 (CLIP
 ViT-B/32 patches). `auto (up to multiple of 32)` (default) bicubic-resizes up to
