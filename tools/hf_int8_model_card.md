@@ -40,7 +40,7 @@ stack — the same int8_convrot format as Comfy-Org's official text encoders.
 
 Per-image deltas were measured with
 [`ComfyUI-pyiqa-toolbox`'s validation script](https://github.com/AnsteinHuynh/ComfyUI-pyiqa-toolbox)
-(`scratch/validate_int8_variant.py`); no ranking flips were observed on the
+(`tools/validate_int8_variant.py`); no ranking flips were observed on the
 probe set. Scores stay on the same 0–1 scale as bf16.
 
 ## The recipe

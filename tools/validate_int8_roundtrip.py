@@ -7,26 +7,18 @@
 Run with the ComfyUI env python. One variant in VRAM at a time.
 """
 
-import glob
 import logging
 import os
 import sys
 
 import torch
 
-import os as _os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # dev_paths sibling
+import dev_paths  # noqa: E402
 
-def _p(key, default):
-    """env override PYIQA_TOOLBOX_<KEY>, else the dev machine default."""
-    return _os.environ.get("PYIQA_TOOLBOX_" + key, default)
-
-TOOLBOX = _p("ROOT", r"C:\Users\kerok\apps\ComfyUI-pyiqa-toolbox")
-COMFY = _p("COMFY", r"C:\MyApps\ComfyUIRoot\20250726-ComfyUI\ComfyUI")
-PYIQA_DIR = _p("MODELS", r"I:\MyApps\ComfyUi\models\pyiqa")
-
-sys.path.insert(0, TOOLBOX)
-sys.path.insert(0, COMFY)
-os.environ.setdefault("HF_HOME", r"I:\MyApps\ComfyUi\models\pyiqa\hf-cache")
+dev_paths.bootstrap(comfy=True)  # pack root, plus a ComfyUI install
+PYIQA_DIR = dev_paths.models_dir()
+os.environ.setdefault("HF_HOME", dev_paths.hf_cache())
 
 logging.basicConfig(level=logging.INFO)
 
@@ -38,9 +30,7 @@ DEV = "cuda"
 
 
 def load_image_tensor():
-    cands = sorted(
-        glob.glob(r"I:\MyApps\sd-train\Flickr2K\Flickr2K_valid\*.png")
-    )
+    cands = dev_paths.image_paths()
     from PIL import Image
 
     img = Image.open(cands[0]).convert("RGB").resize((512, 512))

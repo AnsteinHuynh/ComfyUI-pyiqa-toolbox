@@ -1,11 +1,11 @@
 """Validate an int8_convrot Q-ReAlign checkpoint against its bf16 reference.
 
 Usage:
-    python scratch/validate_int8_variant.py <variant> [int8_folder]
+    python tools/validate_int8_variant.py <variant> [int8_folder]
 
 Examples:
-    python scratch/validate_int8_variant.py Mini-0.8B            # canonical folder
-    python scratch/validate_int8_variant.py Pro-9B ...-int8-convrot-v2
+    python tools/validate_int8_variant.py Mini-0.8B            # canonical folder
+    python tools/validate_int8_variant.py Pro-9B ...-int8-convrot-v2
 
 For each: int8 score, bf16 reference score, |delta|; for Mini also the
 release_metric round-trip hazard check (int8 must stay GPU-resident and
@@ -15,25 +15,17 @@ bf16 references: Mini/Lite from the HF hub snapshot (complete, cached),
 Pro from the local folder.
 """
 
-import glob
 import logging
 import os
 import sys
 
 import torch
 
-import os as _os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # dev_paths sibling
+import dev_paths  # noqa: E402
 
-def _p(key, default):
-    """env override PYIQA_TOOLBOX_<KEY>, else the dev machine default."""
-    return _os.environ.get("PYIQA_TOOLBOX_" + key, default)
-
-TOOLBOX = _p("ROOT", r"C:\Users\kerok\apps\ComfyUI-pyiqa-toolbox")
-COMFY = _p("COMFY", r"C:\MyApps\ComfyUIRoot\20250726-ComfyUI\ComfyUI")
-PYIQA_DIR = _p("MODELS", r"I:\MyApps\ComfyUi\models\pyiqa")
-
-sys.path.insert(0, TOOLBOX)
-sys.path.insert(0, COMFY)
+dev_paths.bootstrap(comfy=True)  # pack root, plus a ComfyUI install
+PYIQA_DIR = dev_paths.models_dir()
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -44,13 +36,17 @@ from utility import pyiqa_utils, qrealign_int8  # noqa: E402
 DEV = "cuda"
 
 BF16_SRC = {
-    "Mini-0.8B": (
-        "C:/Users/kerok/.cache/huggingface/hub/models--q-future--Q-ReAlign-Mini-0.8B"
-        "/snapshots/fe1f45a7574c9e9d908875af9f7e90cb946aa19f"
+    "Mini-0.8B": os.path.join(
+        dev_paths.hf_hub(),
+        "models--q-future--Q-ReAlign-Mini-0.8B",
+        "snapshots",
+        "fe1f45a7574c9e9d908875af9f7e90cb946aa19f",
     ),
-    "Lite-4B": (
-        "C:/Users/kerok/.cache/huggingface/hub/models--q-future--Q-ReAlign-Lite-4B"
-        "/snapshots/06add46a6bc4a7dfcf0a59a2fb1ed15a6e3d30b7"
+    "Lite-4B": os.path.join(
+        dev_paths.hf_hub(),
+        "models--q-future--Q-ReAlign-Lite-4B",
+        "snapshots",
+        "06add46a6bc4a7dfcf0a59a2fb1ed15a6e3d30b7",
     ),
     "Pro-9B": os.path.join(PYIQA_DIR, "Q-ReAlign-Pro-9B"),
 }
@@ -60,7 +56,7 @@ def load_image_tensors(n=8):
     from PIL import Image
     import numpy as np
 
-    cands = sorted(glob.glob(r"I:\MyApps\sd-train\Flickr2K\Flickr2K_valid\*.png"))[:n]
+    cands = dev_paths.image_paths(n)
     imgs = []
     for p in cands:
         im = Image.open(p).convert("RGB").resize((512, 512))

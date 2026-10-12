@@ -1,22 +1,15 @@
 """Time int8 vs bf16 Q-ReAlign scoring and count kitchen kernel dispatches."""
-import glob
 import os
 import sys
 import time
 
 import torch
 
-import os as _os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # dev_paths sibling
+import dev_paths  # noqa: E402
 
-def _p(key, default):
-    """env override PYIQA_TOOLBOX_<KEY>, else the dev machine default."""
-    return _os.environ.get("PYIQA_TOOLBOX_" + key, default)
-
-TOOLBOX = _p("ROOT", r"C:\Users\kerok\apps\ComfyUI-pyiqa-toolbox")
-COMFY = _p("COMFY", r"C:\MyApps\ComfyUIRoot\20250726-ComfyUI\ComfyUI")
-PYIQA_DIR = _p("MODELS", r"I:\MyApps\ComfyUi\models\pyiqa")
-sys.path.insert(0, TOOLBOX)
-sys.path.insert(0, COMFY)
+dev_paths.bootstrap(comfy=True)  # pack root, plus a ComfyUI install (comfy_kitchen)
+PYIQA_DIR = dev_paths.models_dir()
 
 import pyiqa  # noqa: E402
 from utility import qrealign_int8  # noqa: E402
@@ -42,7 +35,7 @@ def load_imgs(n=8):
     from PIL import Image
     import numpy as np
 
-    paths = sorted(glob.glob(r"I:\MyApps\sd-train\Flickr2K\Flickr2K_valid\*.png"))[:n]
+    paths = dev_paths.image_paths(n)
     return torch.cat([
         torch.from_numpy(np.asarray(Image.open(p).convert("RGB").resize((512, 512))))
         .permute(2, 0, 1).unsqueeze(0).float().clone() / 255.0

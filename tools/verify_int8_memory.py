@@ -4,19 +4,16 @@ Scenario the user hit: score an int8 model with the park mode -> VRAM must go
 DOWN (collapse to full unload), and the next score (handed the hollow shell,
 as ComfyUI's output cache would) must reproduce identical values.
 """
-import glob
 import os
 import sys
 import time
 
 import torch
 
-sys.path.insert(0, os.environ.get(
-    "PYIQA_TOOLBOX_ROOT", r"C:\Users\kerok\apps\ComfyUI-pyiqa-toolbox"
-))
-sys.path.insert(0, os.environ.get(
-    "PYIQA_TOOLBOX_COMFY", r"C:\MyApps\ComfyUIRoot\20250726-ComfyUI\ComfyUI"
-))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # dev_paths sibling
+import dev_paths  # noqa: E402
+
+dev_paths.bootstrap(comfy=True)  # pack root, plus a ComfyUI install
 
 import logging
 
@@ -27,9 +24,7 @@ from utility import qrealign_int8  # noqa: E402
 from PIL import Image  # noqa: E402
 import numpy as np  # noqa: E402
 
-PYIQA_DIR = os.environ.get(
-    "PYIQA_TOOLBOX_MODELS", r"I:\MyApps\ComfyUi\models\pyiqa"
-)
+PYIQA_DIR = dev_paths.models_dir()
 DEV = "cuda"
 
 
@@ -38,7 +33,7 @@ def vram():
 
 
 def imgs(n=4):
-    paths = sorted(glob.glob(r"I:\MyApps\sd-train\Flickr2K\Flickr2K_valid\*.png"))[:n]
+    paths = dev_paths.image_paths(n)
     return torch.cat([
         torch.from_numpy(np.asarray(Image.open(p).convert("RGB").resize((512, 512))))
         .permute(2, 0, 1).unsqueeze(0).float().clone() / 255.0

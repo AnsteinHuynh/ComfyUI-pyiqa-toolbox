@@ -4,3 +4,7 @@ __pycache__/
 .DS_Store
 Thumbs.db
 AGENTS.md
+assistant-scratchwork-gitignored/
+comfyui-documentation.md
+/docs/ComfyUI/
+tools/dev_paths_local.py

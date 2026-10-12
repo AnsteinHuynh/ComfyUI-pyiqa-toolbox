@@ -13,10 +13,14 @@ import numpy as np
 import torch
 from PIL import Image
 
-PKG = os.environ.get(
-    "PYIQA_TOOLBOX_ROOT", r"C:\Users\kerok\apps\ComfyUI-pyiqa-toolbox"
-)
-FIX = r"C:\Users\kerok\miniconda3\envs\20260504comfyui\Lib\site-packages\ResultsCalibra"
+# This machine's paths come from dev_paths (PYIQA_TOOLBOX_ROOT, or the gitignored
+# tools/dev_paths_local.py); the fixture itself ships in site-packages, so that
+# half needs no configuration at all.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import dev_paths  # noqa: E402
+
+PKG = dev_paths.ROOT
+FIX = os.path.join(dev_paths.site_packages(), "ResultsCalibra")
 
 spec = importlib.util.spec_from_file_location(
     "pyiqa_toolbox_calibra", os.path.join(PKG, "__init__.py"),
@@ -64,47 +68,71 @@ EXPECT_NR = {
 fails = []
 
 
-def check(name, ours, expect, tol_rel=2e-3):
+def check(name, ours, expect, tol_rel=2e-3, atol=1e-4):
+    """Compare against the docs column with a numpy-style atol + rtol.
+
+    The docs table rounds to 4 decimals, so a metric whose value is near zero
+    (gmsd: 0.0005) must be judged on the absolute difference - a pure relative
+    tolerance calls an exact match a failure there.
+    """
     ok = True
+    worst = 0.0
     for o, e in zip(ours, expect):
-        if e == 0:
-            if abs(o - e) > 1e-4:
-                ok = False
-        elif abs(o - e) / max(abs(e), 1e-6) > tol_rel:
+        diff = abs(o - e)
+        worst = max(worst, diff)
+        if diff > atol + tol_rel * abs(e):
             ok = False
     status = "OK " if ok else "DIFF"
     if not ok:
         fails.append(name)
     print(f"{status} {name:10s} ours={[round(v,4) for v in ours]}")
     if not ok:
-        print(f"     {'':10s} docs={[round(v,4) for v in expect]}")
+        print(f"     {'':10s} docs={[round(v,4) for v in expect]} (worst diff {worst:.2e})")
+
+
+def load_by_registry(name):
+    """``(bundle, mode)`` for a pyiqa registry metric, via its architecture.
+
+    Drives the pack the way a user does - ``(Down)load pyiqa Model`` then a generic
+    score node - instead of naming a node per metric, so this tool follows the
+    node surface instead of pinning it.
+    """
+    catalog = sys.modules["pyiqa_toolbox_calibra.utility.metric_catalog"]
+    for value in catalog.VARIANT_VALUES:
+        arch, _, _label = value.partition(catalog.SEPARATOR)
+        if catalog.ARCHITECTURES[arch].signpost:
+            # listed in the dropdown so users find the dedicated loader, but
+            # there is nothing here to load (and resolve refuses it on purpose)
+            continue
+        resolved = catalog.resolve(arch, value)
+        if resolved.base == name and not resolved.custom:
+            bundle = pack.NODE_CLASS_MAPPINGS["PyiqaAnyLoader"]().load(arch, value)[0]
+            return bundle, resolved.mode
+    raise SystemExit(f"metric {name!r} is not in the catalog any more")
 
 
 cd, cr = comfy(dist), comfy(ref)
 for metric, expect in EXPECT_FR.items():
-    (m,) = pack.NODE_CLASS_MAPPINGS["ClassicFRLoader"]().load(metric)
-    (s,) = pack.NODE_CLASS_MAPPINGS["ClassicFRScore"]().score(m, cd, cr)
+    bundle, mode = load_by_registry(metric)
+    assert mode == "FR", (metric, mode)
+    (s,) = pack.NODE_CLASS_MAPPINGS["PyiqaAnyFRScore"]().score(bundle, cd, cr)
     check(metric, s, expect)
 
-# dists via its family
-(dm,) = pack.NODE_CLASS_MAPPINGS["DISTSLoader"]().load("dists", "(none)", "dists")
-(s,) = pack.NODE_CLASS_MAPPINGS["DISTSFrScore"]().score(dm, cd, cr)
+# dists via the generic loader too
+bundle, _mode = load_by_registry("dists")
+(s,) = pack.NODE_CLASS_MAPPINGS["PyiqaAnyFRScore"]().score(bundle, cd, cr)
 check("dists", s, [0.4742, 0.1424, 0.0683, 0.0287, 0.3123])
 
 # lpips (AlexNet)
-(lm,) = pack.NODE_CLASS_MAPPINGS["LPIPSLoader"]().load("lpips (AlexNet)", "(none)", "lpips (AlexNet)")
-(s,) = pack.NODE_CLASS_MAPPINGS["LPIPSFrScore"]().score(lm, cd, cr)
+bundle, _mode = load_by_registry("lpips")
+(s,) = pack.NODE_CLASS_MAPPINGS["PyiqaAnyFRScore"]().score(bundle, cd, cr)
 check("lpips", s, [0.7236, 0.2572, 0.0508, 0.0521, 0.4253])
 
 # NR metrics on the DISTORTED images
 for metric, expect in EXPECT_NR.items():
-    loader, score = ("LAIONLoader", "LAIONNRScore") if metric == "laion_aes" else ("MUSIQLoader", "MUSIQLoaderNRScore" if False else "MUSIQNRScore")
-    label = (
-        "laion_aes (improved aesthetic predictor)"
-        if metric == "laion_aes" else "musiq (KonIQ-10k)"
-    )
-    (m,) = pack.NODE_CLASS_MAPPINGS[loader]().load(label, "(none)", None)
-    (s,) = pack.NODE_CLASS_MAPPINGS[score]().score(m, cd)
+    bundle, mode = load_by_registry(metric)
+    assert mode == "NR", (metric, mode)
+    (s,) = pack.NODE_CLASS_MAPPINGS["PyiqaAnyNRScore"]().score(bundle, cd)
     check(metric, s, expect)
 
 print("\nFAILS:", fails if fails else "none - all nodes match the docs table")

@@ -19,10 +19,12 @@ Run inside the ComfyUI python env (the one with comfy_kitchen + torch cu130):
   python tools/quantize_qrealign_int8_convrot.py --src <qrealign folder> \
       --out <out folder> [--comfy-root <comfyui root>] [--keep lm_head] [--device cuda]
 
-Example:
+Example (weights folder as `PYIQA_TOOLBOX_MODELS` / `tools/dev_paths_local.py`
+defines it; any path works):
+
   python tools/quantize_qrealign_int8_convrot.py \
-      --src I:/MyApps/ComfyUi/models/pyiqa/Q-ReAlign-Pro-9B \
-      --out I:/MyApps/ComfyUi/models/pyiqa/Q-ReAlign-Pro-9B-int8-convrot
+      --src <models>/Q-ReAlign-Pro-9B \
+      --out <models>/Q-ReAlign-Pro-9B-int8-convrot
 """
 
 import argparse
@@ -36,7 +38,13 @@ import torch
 from safetensors import safe_open
 from safetensors.torch import save_file
 
-DEFAULT_COMFY_ROOT = r"C:\MyApps\ComfyUIRoot\20250726-ComfyUI\ComfyUI"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # dev_paths sibling
+import dev_paths  # noqa: E402
+
+# --comfy-root defaults to the same place the other dev tools look for a ComfyUI
+# install (PYIQA_TOOLBOX_COMFY / tools/dev_paths_local.py); None means "not
+# configured", and the loader below says so instead of guessing a path.
+DEFAULT_COMFY_ROOT = dev_paths.COMFY
 GROUP_SIZE = 256
 QUANT_FORMAT = "int8_tensorwise"
 COPY_FILES = (
@@ -52,8 +60,11 @@ COPY_FILES = (
 
 def _import_comfy(comfy_root):
     """Import comfy.quant_ops with a clean argv (comfy.cli_args parses sys.argv)."""
-    if not os.path.isdir(os.path.join(comfy_root, "comfy")):
-        raise SystemExit(f"no ComfyUI at {comfy_root} (use --comfy-root)")
+    if not comfy_root or not os.path.isdir(os.path.join(comfy_root, "comfy")):
+        raise SystemExit(
+            f"no ComfyUI at {comfy_root!r} - pass --comfy-root, or set "
+            f"PYIQA_TOOLBOX_COMFY (or COMFY in tools/dev_paths_local.py)"
+        )
     saved_argv, sys.argv, saved_path = sys.argv, ["quantizer"], list(sys.path)
     sys.path.insert(0, comfy_root)
     try:
