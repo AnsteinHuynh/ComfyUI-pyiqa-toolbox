@@ -6,9 +6,17 @@ the arch's own Qwen processor. Reference: Wu et al., "Q-Align: Teaching LMMs for
 Visual Scoring via Discrete Text-Defined Levels", arXiv:2312.17009.
 
 Weights are looked up in the ComfyUI ``models/pyiqa`` folder first (each
-variant as an HF-snapshot-style subfolder, e.g. ``Q-ReAlign-Pro-9B/``), falling
-back to the q-future HuggingFace repos when absent. The folder is redirectable
-via an ``pyiqa:`` key in extra_model_paths.yaml.
+variant as an HF-snapshot-style subfolder, e.g. ``Q-ReAlign-Pro-9B/``, in the
+``Q-ReAlign/`` architecture folder or loose), falling back to the q-future
+HuggingFace repos when absent. The folder is redirectable via an ``pyiqa:`` key
+in extra_model_paths.yaml.
+
+This module also owns how the Q-ReAlign architecture is *built*, for every node
+in the pack: it registers a builder with ``nodes._common``, so "Load pyiqa
+Model" with architecture=Q-ReAlign produces exactly what this family's loader
+does (the transformers>=5 check, the built-in size variants resolved through the
+local-folder/repo chain, custom snapshot folders, and the int8_convrot build
+for a directory named that way).
 """
 
 import glob
@@ -19,11 +27,16 @@ import pyiqa
 
 from ._common import (
     with_memory_management,
-    MEMORY_MANAGEMENT_INPUT,
     LAZY_MODEL_OPT,
     LazyScoreMixin,
+    MEMORY_MANAGEMENT_INPUT,
+    ModelValidationMixin,
     lazy_image_opt,
+    metric_for_mode,
+    register_arch_builder,
 )
+
+from ..utility import metric_catalog
 
 from ..utility.pyiqa_utils import (
     comfy_image_to_pyiqa,
@@ -31,7 +44,7 @@ from ..utility.pyiqa_utils import (
     ensure_on_device,
     find_pyiqa_model,
     get_cached_metric,
-    list_pyiqa_checkpoints,
+    list_snapshot_dirs,
     local_pyiqa_dir,
     make_room_for_metric,
 )
@@ -80,21 +93,35 @@ def _builtin_resolved_paths():
 
 
 def _custom_options():
-    # snapshot-style dirs (config.json present); skip names shadowing built-ins
-    # by label (case-insensitive), built-ins' own resolved paths, and this
-    # pack's int8_convrot folders (those are the "(int8_convrot)" dropdown
-    # entries, not customs).
+    """Custom snapshot models: the ``models/pyiqa/Q-ReAlign/`` folder.
+
+    A custom model is a snapshot-style directory (``config.json`` + weights) —
+    the layout Q-ReAlign's ``from_pretrained`` needs. Directories that are one
+    of this pack's built-ins are skipped, so the same weights are not offered
+    twice: the ``Q-ReAlign-<size>[-int8-convrot]`` download targets resolve to
+    the loader's own built-in entries.
+    """
     builtin_labels = {label.lower() for label in QREALIGN_VARIANTS}
     builtin_folders = {folder.lower() for _, _, folder in QREALIGN_VARIANTS.values()}
-    return [
-        (label, path)
-        for label, path in list_pyiqa_checkpoints(
-            require_config=True, exclude_paths=_builtin_resolved_paths()
-        )
-        if label.lower() not in builtin_labels
-        and label.lower() not in builtin_folders
-        and not label.lower().endswith(INT8_SUFFIX.lower())
-    ]
+    # this pack's own int8_convrot download targets are built-ins as well (they
+    # live at the pyiqa root, but a user may have copied one in here); a user's
+    # OWN int8 build is a perfectly good custom and is NOT skipped
+    builtin_folders |= {
+        f"{folder}{INT8_SUFFIX}".lower()
+        for _, _, folder in QREALIGN_VARIANTS.values()
+    }
+    builtin_paths = {
+        os.path.normcase(os.path.abspath(p)) for p in _builtin_resolved_paths()
+    }
+    found = []
+    for directory in metric_catalog.family_custom_dirs("qrealign"):
+        for label, path in list_snapshot_dirs(directory):
+            if os.path.normcase(os.path.abspath(path)) in builtin_paths:
+                continue
+            if label.lower() in builtin_labels or label.lower() in builtin_folders:
+                continue
+            found.append((label, path))
+    return found
 
 
 def _resolve_model_arg(label):
@@ -127,6 +154,53 @@ def _int8_variant_base(label):
     return None
 
 
+# pyiqa registry name <-> this family's dropdown variant (pyiqa registers the
+# sizes as qrealign-mini/-lite/-pro, the HF repos carry the parameter counts)
+_VARIANT_TO_REGISTRY = {
+    "qrealign-mini-0.8B": "qrealign-mini",
+    "qrealign-lite-4B": "qrealign-lite",
+    "qrealign-pro-9B": "qrealign-pro",
+}
+_REGISTRY_TO_VARIANT = {name: label for label, name in _VARIANT_TO_REGISTRY.items()}
+
+
+def _registry_name(label):
+    """Dropdown label -> pyiqa registry name (for the model_name output)."""
+    base = _int8_variant_base(label)
+    if base is not None:
+        return _VARIANT_TO_REGISTRY[base]
+    if label in _VARIANT_TO_REGISTRY:
+        return _VARIANT_TO_REGISTRY[label]
+    return "qrealign"  # a custom snapshot folder: any size, arch-level name
+
+
+def build_qrealign(resolved, device):
+    """Build a Q-ReAlign metric for ANY loader in this pack.
+
+    Registered as the architecture's builder, so "(Down)load pyiqa Model" with
+    architecture=Q-ReAlign goes through exactly this code: the transformers>=5
+    check, the built-in sizes resolved through the local-folder/repo chain, and
+    custom snapshot directories from models/pyiqa/Q-ReAlign/ (through the
+    int8_convrot loader when the directory name says so, else a plain
+    ``from_pretrained`` on the folder).
+    """
+    _require_transformers_v5()
+    make_room_for_metric(device)  # 0.8B..9B, int8 or not: always make room
+    if resolved.kind == "snapshot":
+        if resolved.path.lower().endswith(INT8_SUFFIX.lower()):
+            from ..utility import qrealign_int8
+
+            return qrealign_int8.create_int8_metric(resolved.path, device)
+        return pyiqa.create_metric("qrealign", device=device, model=resolved.path)
+    variant = _REGISTRY_TO_VARIANT.get(resolved.base, "qrealign-mini-0.8B")
+    return pyiqa.create_metric(
+        "qrealign", device=device, dtype="auto", model=_resolve_model_arg(variant)
+    )
+
+
+register_arch_builder("Q-ReAlign", build_qrealign)
+
+
 def _int8_complete(path):
     return bool(
         path
@@ -156,7 +230,14 @@ def _int8_repo_folder_size(repo, folder):
 def _resolve_int8_dir(label, repo):
     """Local int8_convrot copy first; else download it from ``repo`` (a
     HuggingFace repo holding one folder per variant, produced by this pack's
-    tools/quantize_qrealign_int8_convrot.py)."""
+    tools/quantize_qrealign_int8_convrot.py).
+
+    The repo carries ALL variants at its top level, so the download is
+    scoped with ``allow_patterns`` to this variant's folder only and lands
+    as ``models/pyiqa/<variant>-int8-convrot/<files>`` - the flat layout the
+    search chain and the completeness check expect. (An older unscoped
+    download nested the whole repo inside that folder; such leftovers are
+    flagged, never read.)"""
     if label not in QREALIGN_VARIANTS:
         raise ValueError(
             "int8_convrot is wired for the built-in variants only; quantize a "
@@ -168,19 +249,37 @@ def _resolve_int8_dir(label, repo):
     local = find_pyiqa_model(name)
     if _int8_complete(local):
         return local
+    if local:
+        # stale full-repo download (bug): variant folders NESTED inside
+        # models/pyiqa/<name>/ are not the expected layout and are never
+        # read - point the user at the reclaimable space
+        stale = sorted(glob.glob(os.path.join(local, "Q-ReAlign-*-int8-convrot")))
+        if stale:
+            logger.warning(
+                "(pyiqa-toolbox) %s holds leftover folders from an older "
+                "full-repo download: %s - unused, delete them to reclaim "
+                "the space",
+                local,
+                ", ".join(os.path.basename(s) for s in stale),
+            )
     try:
         from huggingface_hub import snapshot_download
     except ImportError as exc:
         raise RuntimeError(
             f"no local {name} and huggingface_hub is not installed ({exc})"
         ) from exc
-    target = os.path.join(local_pyiqa_dir(), name)
+    root = local_pyiqa_dir()
     size_note = _int8_repo_folder_size(repo, name)
     logger.info(
-        "(pyiqa-toolbox) %s not local; downloading from %s into %s%s",
-        name, repo, target, f" ({size_note})" if size_note else "",
+        "(pyiqa-toolbox) %s not local; downloading %s/ from %s into %s%s",
+        name, name, repo, root, f" ({size_note})" if size_note else "",
     )
-    path = snapshot_download(repo_id=repo, local_dir=target)
+    snapshot_download(
+        repo_id=repo,
+        local_dir=root,
+        allow_patterns=[f"{name}/**"],
+    )
+    path = os.path.join(root, name)
     if not _int8_complete(path):
         raise RuntimeError(
             f"{repo} does not contain a usable {name} folder (need config.json "
@@ -209,18 +308,23 @@ class QReAlignLoader:
         return {
             "required": {
                 "model_name": (
-                    list(QREALIGN_VARIANTS.keys())
-                    + [k + INT8_LABEL_SUFFIX for k in QREALIGN_VARIANTS]
+                    [k + INT8_LABEL_SUFFIX for k in QREALIGN_VARIANTS]
+                    + list(QREALIGN_VARIANTS.keys())
                     + [label for label, _ in _custom_options()],
                     {
                         "default": "qrealign-mini-0.8B",
                         "tooltip": (
-                            "Mini 0.8B (fast) / Lite 4B / Pro 9B (best correlation, slowest); "
-                            "the '(int8_convrot)' entries load the quantized builds instead "
-                            "(same pick, a third less VRAM, tiny score drift). Plus any custom "
-                            "snapshot-style folder in models/pyiqa (dir with a config.json, e.g. "
-                            "your own Qwen3.5-VL quality fine-tune). Built-ins come from the "
-                            "pyiqa folders/HF cache; absent weights auto-download on first use."
+                            "The '(int8_convrot)' entries (listed first) load the "
+                            "quantized builds - same pick, a third less size/VRAM, "
+                            "tiny score drift. The plain entries are Mini 0.8B "
+                            "(fast) / Lite 4B / Pro 9B (best correlation, slowest). "
+                            "Plus any custom snapshot folder in "
+                            "models/pyiqa/Q-ReAlign/ (a directory with a "
+                            "config.json, e.g. your own Qwen3.5-VL quality "
+                            "fine-tune; the directory name is the entry name). "
+                            "Built-ins come from the pyiqa "
+                            "folders/HF cache; absent weights auto-download on "
+                            "first use."
                         ),
                     },
                 ),
@@ -238,10 +342,14 @@ class QReAlignLoader:
             }
         }
 
-    RETURN_TYPES = ("PYIQA_QREALIGN",)
-    RETURN_NAMES = ("model",)
+    RETURN_TYPES = ("PYIQA_QREALIGN", "STRING", "STRING")
+    RETURN_NAMES = ("model", "model_name", "variant_label")
     OUTPUT_TOOLTIPS = (
         "The loaded Q-ReAlign scorer. Wire it into the QReAlign NR Score node.",
+        "The pyiqa registry name this build corresponds to, e.g. "
+        "'qrealign-mini' (or 'qrealign' for a custom snapshot folder).",
+        "The variant as shown in the dropdown, e.g. 'qrealign-mini-0.8B "
+        "(int8_convrot)'.",
     )
     FREE_COMFY_MEMORY = True  # pro-9B is huge; free the SDXL cache first
     FUNCTION = "load"
@@ -267,7 +375,7 @@ class QReAlignLoader:
                 "qrealign", ("int8", int8_dir, str(device)), factory
             )
             ensure_on_device(metric, device)
-            return (metric,)
+            return (metric, _registry_name(model_name), model_name)
 
         model_arg = _resolve_model_arg(model_name)
 
@@ -281,10 +389,10 @@ class QReAlignLoader:
             "qrealign", (model_arg, dtype, str(device)), factory
         )
         ensure_on_device(metric, device)
-        return (metric,)
+        return (metric, _registry_name(model_name), model_name)
 
 
-class QReAlignScore(LazyScoreMixin):
+class QReAlignScore(ModelValidationMixin, LazyScoreMixin):
     """No-reference Q-ReAlign score. Higher is better, range 0-1.
 
     ``score`` is a per-image list (OUTPUT_IS_LIST): each image's score flows on
@@ -292,6 +400,15 @@ class QReAlignScore(LazyScoreMixin):
     """
 
     CATEGORY = "pyiqa/QReAlign"
+    MODEL_TYPE = "PYIQA_QREALIGN"
+    FAMILY = "qrealign"
+    SCORE_LABEL = "QReAlign NR Score"
+    # Q-ReAlign metrics are NR. The dedicated loader hands over pyiqa's metric
+    # object itself (whose mode reads as unknown, so the check stays silent),
+    # while "(Down)load pyiqa Model" hands over a bundle that DOES know its mode -
+    # without this line that path was refused with "scores None-reference
+    # models only".
+    MODE_CHECK = "NR"
     DESCRIPTION = (
         "No-reference Q-ReAlign quality (or aesthetic) score. 0-1, higher is "
         "better. Score is per-image. Lazy: the model loads only once the image "
@@ -304,7 +421,7 @@ class QReAlignScore(LazyScoreMixin):
         return {
             "required": {
                 "memory_management": MEMORY_MANAGEMENT_INPUT,
-                "model": ("PYIQA_QREALIGN", dict(LAZY_MODEL_OPT)),
+                "model": (cls._model_input_type(), dict(LAZY_MODEL_OPT)),
                 "image": (
                     "IMAGE",
                     lazy_image_opt(
@@ -336,7 +453,11 @@ class QReAlignScore(LazyScoreMixin):
     def score(self, model=None, image=None, task="quality IQA", **kwargs):
         if self._skipped(model, image):
             return ([],)
+        self._require_compatible(model)
+        # the family loader hands over the InferenceModel itself, "Load pyiqa
+        # Model" hands over a MetricBundle wrapping it
+        metric = metric_for_mode(model, self.MODE_CHECK)
         dev = ensure_on_device(model, default_device())
         x = comfy_image_to_pyiqa(image, dev)
-        out = model(x, task_=TASKS[task])
+        out = metric(x, task_=TASKS[task])
         return ([float(v) for v in out],)

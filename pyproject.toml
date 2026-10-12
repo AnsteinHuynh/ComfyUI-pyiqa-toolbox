@@ -1,10 +1,13 @@
 [project]
-name = "comfyui-pyiqa-toolbox"
-description = "ComfyUI nodes wrapping pyiqa (IQA-Pytorch) quality metrics - loader + score nodes per architecture family (Q-ReAlign, FGResQ, ...)."
+# Registry node id. The registry spec forbids "ComfyUI" in `name`, and the id is
+# immutable after the first publish (it is in the install URL) - hence
+# "pyiqa-toolbox" while the GitHub repository keeps its ComfyUI- name.
+name = "pyiqa-toolbox"
+description = "ComfyUI nodes wrapping pyiqa (IQA-Pytorch) quality metrics: one loader over the whole registry, generic FR/NR score nodes, plus dedicated nodes for Q-ReAlign, FGResQ, FID and CLIP Score."
 version = "0.2.0"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = { file = "LICENSE" }
 authors = [{name = "Anstein Huynh"}]
 keywords = [
     "comfyui",
@@ -16,13 +19,24 @@ keywords = [
     "int8",
     "quantization",
 ]
-# transformers>=5 is needed only by the QReAlign nodes (and the FGResQ
-# transformers-5 fix); see requirements.txt for why it is not pinned here.
-dependencies = ["pyiqa>=0.1.15"]
+classifiers = [
+    "Operating System :: OS Independent",
+    "Environment :: GPU :: NVIDIA CUDA",
+]
+# Node requirements live in requirements.txt (installed by ComfyUI / Manager).
+# The registry's `dependencies` field is for ComfyUI *frontend* compatibility, so
+# it is left dynamic instead of being misused to carry pyiqa.
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
 
 [project.urls]
 Repository = "https://github.com/AnsteinHuynh/ComfyUI-pyiqa-toolbox"
+"Bug Tracker" = "https://github.com/AnsteinHuynh/ComfyUI-pyiqa-toolbox/issues"
 
 [tool.comfy]
-DisplayName = "ComfyUI-pyiqa-toolbox"
+# PublisherId must match the registry account exactly (immutable, used in URLs);
+# confirm it on registry.comfy.org before the first publish.
 PublisherId = "AnsteinHuynh"
+DisplayName = "pyiqa-toolbox"

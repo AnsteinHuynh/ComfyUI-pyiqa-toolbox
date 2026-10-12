@@ -12,16 +12,20 @@ way, without a second copy in VRAM).
 
 Weights are looked up in the ComfyUI ``models/pyiqa`` folder first
 (``FGResQ.pth`` and ``FGResQ_Degradation.pth``), falling back to pyiqa's
-auto-download when absent.
+auto-download when absent. Custom fine-tunes live in ``models/pyiqa/FGResQ/``
+and appear as variants of this loader.
+
+This module also owns how the FGResQ architecture is *built*, for every node in
+the pack (``register_arch_builder``): the main plus degradation weights and the
+transformers>=5.6 key remap are this family's business, so "(Down)load pyiqa Model"
+with architecture=FGResQ produces the same bundle, usable by both FGResQ score
+nodes.
 """
 
 import logging
-import os
 import warnings
 
 import pyiqa
-from pyiqa.archs.fgresq_arch import default_model_urls, load_checkpoint
-from pyiqa.utils.download_util import load_file_from_url
 
 from ..utility.pyiqa_utils import (
     ORDER_ASYMMETRIC,
@@ -31,16 +35,19 @@ from ..utility.pyiqa_utils import (
     ensure_on_device,
     find_pyiqa_model,
     get_cached_metric,
-    list_pyiqa_checkpoints,
+    load_state_dict,
     reference_tooltip,
 )
 
 from ._common import (
     with_memory_management,
-    MEMORY_MANAGEMENT_INPUT,
     LAZY_MODEL_OPT,
     LazyScoreMixin,
+    MEMORY_MANAGEMENT_INPUT,
+    ModelValidationMixin,
     lazy_image_opt,
+    metric_for_mode,
+    register_arch_builder,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,12 +79,31 @@ def _strip_vision_model_prefix(state_dict):
     return out
 
 
-def _fix_fgresq_transformers5_weights(net, main_path=None, deg_path=None):
-    if hasattr(net.clip_model, "vision_model"):
-        return  # transformers <= 5.5.4 layout: the checkpoint loads as-is
+def _fix_fgresq_transformers5_weights(net, main_path=None, deg_path=None, main_state=None):
+    """Load FGResQ's fine-tuned weights, remapping the transformers-4 key layout.
 
-    main_src = main_path or load_file_from_url(default_model_urls["fgresq"])
-    main_sd = _strip_vision_model_prefix(load_checkpoint(main_src))
+    ``main_state`` (an already-read state dict) replaces ``main_path`` — that is
+    how a ``.safetensors`` custom is loaded, since pyiqa's own checkpoint reader
+    is torch.load-only.
+    """
+    # Imported here rather than at module level: ``pyiqa.archs.fgresq_arch``
+    # imports transformers, so a top-level import let one missing/older
+    # transformers take down every node in the pack (it registered zero) instead
+    # of failing only when an FGResQ model is actually built.
+    from pyiqa.archs.fgresq_arch import default_model_urls, load_checkpoint
+    from pyiqa.utils.download_util import load_file_from_url
+
+    needs_remap = not hasattr(net.clip_model, "vision_model")  # transformers >= 5.6
+    if main_state is None and not needs_remap:
+        return  # transformers <= 5.5.4 layout: the arch loaded it as-is
+
+    if main_state is None:
+        main_src = main_path or load_file_from_url(default_model_urls["fgresq"])
+        main_sd = load_checkpoint(main_src)
+    else:
+        main_sd = main_state
+    if needs_remap:
+        main_sd = _strip_vision_model_prefix(main_sd)
     missing, unexpected = net.load_state_dict(main_sd, strict=False)
     if unexpected:
         raise RuntimeError(f"FGResQ main weights still mismatch: {unexpected[:5]}")
@@ -128,6 +154,13 @@ class FGResQBundle:
         # lets ensure_on_device treat the bundle like an InferenceModel
         return self.nr.dummy_param
 
+    @property
+    def metric(self):
+        # MetricBundle contract: drop_metric unwraps ``.metric`` on wrappers
+        # that are not nn.Modules, so unload must find a real module here -
+        # the pair wrapper carries the (shared) arch's own parameters
+        return self.pair
+
     def to(self, device):
         # the two wrappers share one net; .to on both moves it once plus each
         # wrapper's dummy param
@@ -135,103 +168,85 @@ class FGResQBundle:
         self.pair.to(device)
         return self
 
+    def for_mode(self, mode):
+        """The metric that scores ``mode``: "NR" -> single image, else the pair.
 
-def _default_weight_basenames():
-    """Basenames of pyiqa's OWN default FGResQ weights (FGResQ.pth and
-    FGResQ_Degradation.pth) — never customs, so drop them from dropdowns."""
-    return {os.path.basename(url) for url in default_model_urls.values()}
+        One net serves both pyiqa metrics, so a score node has to ask for the
+        one it needs. Without this the generic loader's NR variant was handed to
+        pyiqa NR Score as the pair wrapper, which asserted "Please specify
+        reference image for Full Reference metric".
+        """
+        return self.nr if mode == "NR" else self.pair
 
+    def __call__(self, *args, **kwargs):
+        """Behave like a plain pyiqa metric: the pair wrapper.
 
-def _custom_options():
-    """Custom FGResQ*.pth fine-tunes: dropdown label -> path.
-
-    Excludes pyiqa's own default/degradation weights (by basename) and the
-    currently-resolved default main checkpoint (by path), so the family's own
-    files never masquerade as customs.
-    """
-    default_path = find_pyiqa_model("FGResQ.pth")
-    return list_pyiqa_checkpoints(
-        "FGResQ*.pth",
-        exclude_names=_default_weight_basenames(),
-        exclude_paths=[default_path] if default_path is not None else (),
-    )
+        Kept for direct/legacy calls. Score nodes go through ``for_mode``, and
+        the pair metric needs BOTH images - it is not a single-image fallback.
+        """
+        return self.pair(*args, **kwargs)
 
 
-class FGResQLoader:
-    """Loads FGResQ once; feeds both the NR and the pair score nodes."""
-
-    CATEGORY = "pyiqa/FGResQ"
-    DESCRIPTION = (
-        "Loads the FGResQ model once (single arch shared by the NR and pair "
-        "modes). Feeds FGResQ Score (NR) and FGResQ Pair Score (FR)."
-    )
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        customs = _custom_options()
-        return {
-            "required": {
-                "checkpoint": (
-                    ["(default)"] + [label for label, _ in customs],
-                    {
-                        "default": "(default)",
-                        "tooltip": (
-                            "Main FGResQ weights. '(default)' resolves FGResQ.pth from the "
-                            "pyiqa folders / pyiqa's cache, else downloads the published "
-                            "checkpoint. A custom .pth named FGResQ*.pth in models/pyiqa "
-                            "(e.g. a fine-tune trained on a specific dataset) loads instead; "
-                            "the degradation branch stays on the default weights."
-                        ),
-                    },
-                ),
-            }
-        }
-
-    RETURN_TYPES = ("PYIQA_FGRESQ",)
-    RETURN_NAMES = ("model",)
-    OUTPUT_TOOLTIPS = (
-        "The loaded FGResQ model (one arch shared by both modes). Wire it into "
-        "FGResQ NR Score and/or FGResQ FR Score.",
-    )
-    FUNCTION = "load"
-
-    def load(self, checkpoint):
-        device = default_device()
-        customs = dict(_custom_options())
-        main_path = customs[checkpoint] if checkpoint != "(default)" else find_pyiqa_model("FGResQ.pth")
-        deg_path = find_pyiqa_model("FGResQ_Degradation.pth")
-
-        def factory():
-            kwargs = {}
-            if main_path is not None:
-                kwargs["pretrained_model_path"] = main_path
-            if deg_path is not None:
-                kwargs["degradation_model_path"] = deg_path
-            if kwargs:
-                kwargs["pretrained"] = False  # paths above replace the url load
-            # pyiqa's own strict=False load warns about the vision_model key
-            # mismatch on transformers>=5.6; _fix... reloads with remapped keys
-            # right after and logs its own confirmation, so hide pyiqa's warning.
-            with warnings.catch_warnings():
-                warnings.filterwarnings(
-                    "ignore", message="FGResQ .* loaded with", category=RuntimeWarning
-                )
-                pair = pyiqa.create_metric("fgresq_pair", device=device, **kwargs)
-                _fix_fgresq_transformers5_weights(pair.net, main_path, deg_path)
-                # A second net object would just be discarded for the shared
-                # arch below; skip its weight loading entirely.
-                nr = pyiqa.create_metric("fgresq", device=device, pretrained=False)
-            nr.net = pair.net
-            return FGResQBundle(nr, pair)
-
-        metric = get_cached_metric(
-            "fgresq", (str(device), main_path, deg_path), factory
+def _build_pair_bundle(main_path, deg_path, device, main_state=None):
+    """Build the shared FGResQ arch: both metric modes over ONE net."""
+    kwargs = {}
+    if main_path is not None:
+        kwargs["pretrained_model_path"] = main_path
+    if deg_path is not None:
+        kwargs["degradation_model_path"] = deg_path
+    if kwargs:
+        kwargs["pretrained"] = False  # paths above replace the url load
+    elif main_state is not None:
+        kwargs["pretrained"] = False  # the state dict below replaces the url load
+    # pyiqa's own strict=False load warns about the vision_model key
+    # mismatch on transformers>=5.6; _fix... reloads with remapped keys
+    # right after and logs its own confirmation, so hide pyiqa's warning.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message="FGResQ .* loaded with", category=RuntimeWarning
         )
-        ensure_on_device(metric, device)
-        return (metric,)
+        pair = pyiqa.create_metric("fgresq_pair", device=device, **kwargs)
+        _fix_fgresq_transformers5_weights(
+            pair.net, main_path, deg_path, main_state=main_state
+        )
+        # A second net object would just be discarded for the shared
+        # arch below; skip its weight loading entirely.
+        nr = pyiqa.create_metric("fgresq", device=device, pretrained=False)
+    nr.net = pair.net
+    return FGResQBundle(nr, pair)
 
 
-class FGResQScore(LazyScoreMixin):
+def _build_fgresq_bundle(path, kind, device):
+    """Custom weights file (or the default) -> the shared FGResQ bundle.
+
+    ``.safetensors`` is read here because pyiqa's checkpoint reader is
+    torch.load-only. The degradation branch always uses its own weights file.
+    """
+    main_path = None if kind == "safetensors" else (path or find_pyiqa_model("FGResQ.pth"))
+    main_state = None
+    if kind == "safetensors":
+        main_state = load_state_dict(path)
+        if isinstance(main_state, dict) and isinstance(main_state.get("params"), dict):
+            main_state = main_state["params"]
+    deg_path = find_pyiqa_model("FGResQ_Degradation.pth")
+    bundle = get_cached_metric(
+        "fgresq",
+        (str(device), main_path, deg_path, path),
+        lambda: _build_pair_bundle(main_path, deg_path, device, main_state),
+    )
+    ensure_on_device(bundle, device)
+    return bundle
+
+
+def build_fgresq(resolved, device):
+    """Build an FGResQ bundle for ANY loader in the pack ("(Down)load pyiqa Model")."""
+    return _build_fgresq_bundle(resolved.path, resolved.kind, device)
+
+
+register_arch_builder("FGResQ", build_fgresq)
+
+
+class FGResQScore(ModelValidationMixin, LazyScoreMixin):
     """No-reference FGResQ quality score. Higher is better, range 0-1.
 
     ``score`` is a per-image list (OUTPUT_IS_LIST): each image's score flows on
@@ -239,6 +254,14 @@ class FGResQScore(LazyScoreMixin):
     """
 
     CATEGORY = "pyiqa/FGResQ"
+    MODEL_TYPE = "PYIQA_FGRESQ"
+    FAMILY = "fgresq"
+    SCORE_LABEL = "FGResQ NR Score"
+    MODE_CHECK = "NR"
+    # one net serves this metric and the pair metric (same weights): the bundle
+    # decides which one to run, so either dropdown variant scores here (see
+    # _common.METRIC_FROM_BUNDLE)
+    METRIC_FROM_BUNDLE = True
     DESCRIPTION = (
         "No-reference FGResQ quality score. 0-1, higher is better. Score is "
         "per-image. Lazy model load: the model is fetched only after the image(s) exist."
@@ -250,7 +273,7 @@ class FGResQScore(LazyScoreMixin):
         return {
             "required": {
                 "memory_management": MEMORY_MANAGEMENT_INPUT,
-                "model": ("PYIQA_FGRESQ", dict(LAZY_MODEL_OPT)),
+                "model": (cls._model_input_type(), dict(LAZY_MODEL_OPT)),
                 "image": (
                     "IMAGE",
                     lazy_image_opt(
@@ -275,13 +298,17 @@ class FGResQScore(LazyScoreMixin):
     def score(self, model=None, image=None, **kwargs):
         if self._skipped(model, image):
             return ([],)
+        self._require_compatible(model)
+        # the family loader hands over the bundle, "(Down)load pyiqa Model" a
+        # MetricBundle wrapping it - both resolve to the single-image metric
+        metric = metric_for_mode(model, self.MODE_CHECK)
         dev = ensure_on_device(model, default_device())
         x = comfy_image_to_pyiqa(image, dev)
-        out = model.nr(x)
+        out = metric(x)
         return ([float(v) for v in out],)
 
 
-class FGResQPairScore(LazyScoreMixin):
+class FGResQPairScore(ModelValidationMixin, LazyScoreMixin):
     """Pairwise FGResQ comparison (full-reference).
 
     image1 = x0 (e.g. the distorted/restored candidate), image2 = x1 (the
@@ -291,6 +318,15 @@ class FGResQPairScore(LazyScoreMixin):
     """
 
     CATEGORY = "pyiqa/FGResQ"
+    MODEL_TYPE = "PYIQA_FGRESQ"
+    FAMILY = "fgresq"
+    SCORE_LABEL = "FGResQ FR Score"
+    MODE_CHECK = "FR"
+    HANDLES_MULTI_OUTPUT = True  # this is the node for the pair API's 4 values
+    # one net serves this metric and the NR metric (same weights): the bundle
+    # decides which one to run, so either dropdown variant scores here (see
+    # _common.METRIC_FROM_BUNDLE)
+    METRIC_FROM_BUNDLE = True
     DESCRIPTION = (
         "Pairwise FGResQ comparison: a quality score for each side plus a rank "
         "verdict per pair. pyiqa's pair API returns (quality0, quality1, rank, "
@@ -308,7 +344,7 @@ class FGResQPairScore(LazyScoreMixin):
         return {
             "required": {
                 "memory_management": MEMORY_MANAGEMENT_INPUT,
-                "model": ("PYIQA_FGRESQ", dict(LAZY_MODEL_OPT)),
+                "model": (cls._model_input_type(), dict(LAZY_MODEL_OPT)),
                 "target": ("IMAGE", lazy_image_opt(TARGET_TOOLTIP)),
                 "reference": (
                     "IMAGE",
@@ -340,15 +376,23 @@ class FGResQPairScore(LazyScoreMixin):
     def score(self, model=None, target=None, reference=None, **kwargs):
         if self._skipped(model, target, reference):
             return ([], [], [], [], [])
+        self._require_compatible(model)
         if target.shape[0] != reference.shape[0]:
             raise ValueError(
                 f"target and reference must have the same batch size, got "
                 f"{target.shape[0]} and {reference.shape[0]}"
             )
+        pair = getattr(model, "pair", None) or getattr(model, "metric", None)
+        if not callable(pair):
+            raise ValueError(
+                "FGResQ FR Score needs the FGResQ model: the pair verdict comes "
+                "from the arch loaded by (Down)load FGResQ or by Load pyiqa "
+                "Model with an FGResQ variant."
+            )
         dev = ensure_on_device(model, default_device())
         x0 = comfy_image_to_pyiqa(target, dev)
         x1 = comfy_image_to_pyiqa(reference, dev)
-        quality0, quality1, rank, rank_prob = model.pair(x0, x1)
+        quality0, quality1, rank, rank_prob = pair(x0, x1)
 
         ranks = [int(r) for r in rank.flatten().tolist()]
         return (

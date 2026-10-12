@@ -1,5 +1,16 @@
-# transformers>=5.0 is needed ONLY by the QReAlign nodes (Qwen3.5-VL) and the
-# FGResQ transformers-5 fix. It is deliberately not pinned here: forcing that
-# upgrade on every install can break other custom nodes. The QReAlign Loader
-# checks the version at load time and prints the exact pip command to fix it.
+# Only pyiqa is pinned here. It brings torch/torchvision and - through pyiqa's
+# own metadata - transformers>=5.0, accelerate, bitsandbytes and openai-clip.
+#
+# transformers>=5.0 is required by the QReAlign nodes (Qwen3.5-VL) and by the
+# FGResQ transformers-5 weight fix, so the pack does not pin it a second time.
+# Note the consequence: installing or upgrading pyiqa resolves transformers to
+# >=5.0, which can break other custom nodes pinned to transformers 4.x. The
+# QReAlign Loader checks the version at load time and prints the exact pip
+# command to fix it, instead of failing deep inside a model load.
+#
+# The `clip` module that pyiqa's CLIPScore imports comes from the openai-clip
+# distribution (also pyiqa's own dependency), so a normal install already has
+# it; only the CLIP Score node uses it, and pyiqa raises a clear ImportError
+# naming it if the environment is trimmed. The README says so where the node is
+# documented.
 pyiqa>=0.1.15

@@ -1,0 +1,7 @@
+# Files that are development-only: `comfy node publish` packages every
+# git-tracked file, and ComfyUI-Manager installs that archive, so the smoke suite
+# and the int8 development tools stay out of it. Syntax is .gitignore's; this
+# layers on top of .gitignore.
+#
+# Clone the repository to run these (see README, "Dev layout").
+tools/
