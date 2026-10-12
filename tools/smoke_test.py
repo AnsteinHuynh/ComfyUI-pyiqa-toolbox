@@ -409,10 +409,9 @@ def main():
     print("startup line:", line)
 
     print("\n-- Step 2: the 10-node surface; refusal messages name survivors --")
-    # Ported from assistant-scratchwork-gitignored/probe_step2.py. No weights are
-    # loaded: the accept/refuse matrix drives the guard (which runs before any
-    # model work) with bundles built from the catalog, so this whole section is
-    # milliseconds and cannot be the reason the suite is slow.
+    # No weights are loaded: the accept/refuse matrix drives the guard (which
+    # runs before any model work) with bundles built from the catalog, so this
+    # whole section is milliseconds and cannot be the reason the suite is slow.
     nodes = pack.NODE_CLASS_MAPPINGS
     names = pack.NODE_DISPLAY_NAME_MAPPINGS
     # the surface itself: 10 classes in NODE_CONFIG order, each with its display
@@ -822,10 +821,9 @@ def main():
           "2 captions -> paired per image (no downloads)")
 
     print("\n-- Step 3: one rule table per architecture; the Q-Align gate --")
-    # Ported from assistant-scratchwork-gitignored/probe_step3.py. Nothing is
-    # downloaded: the gate is exercised as a function, and the build_metric hook
-    # is proven with a temporary sentinel builder for an architecture that costs
-    # nothing to "build".
+    # Nothing is downloaded: the gate is exercised as a function, and the
+    # build_metric hook is proven with a temporary sentinel builder for an
+    # architecture that costs nothing to "build".
     import pyiqa_toolbox_smoke.nodes.arch_gates as arch_gates
 
     rules = metric_catalog._ARCH_RULES

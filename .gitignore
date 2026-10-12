@@ -3,8 +3,27 @@ __pycache__/
 *.pyo
 .DS_Store
 Thumbs.db
+
+# Agent/dev instructions and local path overrides: each contributor's own
+# AGENTS.md, and tools/dev_paths_local.py carries ONE machine's paths (dev_paths
+# reads the PYIQA_TOOLBOX_* env vars first, so nothing here is required).
 AGENTS.md
-assistant-scratchwork-gitignored/
+tools/dev_paths_local.py
+
+# Mirrored third-party documentation, fetched for offline reading.
 comfyui-documentation.md
 /docs/ComfyUI/
-tools/dev_paths_local.py
+
+# Model weights belong in ComfyUI's models/pyiqa, never in a checkout of this
+# pack - a dropped checkpoint is hundreds of MB to tens of GB.
+*.pth
+*.safetensors
+*.ckpt
+*.bin
+
+# Dev scratch
+*.log
+.venv/
+venv/
+.idea/
+.vscode/

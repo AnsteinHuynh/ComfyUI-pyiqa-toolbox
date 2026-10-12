@@ -298,8 +298,8 @@ model's forward is untouched. That is the whole UI: no extra combos.
   `snapshot_download` scoped with `allow_patterns` to the one variant
   folder — only that variant's ~9 files land in `models/pyiqa/`, never the
   whole repo.
-- **Sizes on this machine** (`I:/MyApps/ComfyUi/models/pyiqa/`): Pro 9B
-  17.5 → 11.55 GiB, Lite 4B 9.7 → 6.28 GiB, Mini 0.8B 2.1 → 1.56 GiB.
+- **Sizes** (`models/pyiqa/`): Pro 9B 17.5 → 11.55 GiB, Lite 4B 9.7 → 6.28 GiB,
+  Mini 0.8B 2.1 → 1.56 GiB.
   Kept in bf16: `lm_head`, the visual merger, the linear-attention a/b gate
   projections, `k_proj`/`v_proj`, and the entire first + last decoder blocks
   (the "keep bundle" — small layers with outsized influence; the big MLP
@@ -321,7 +321,7 @@ model's forward is untouched. That is the whole UI: no extra combos.
 - **Uploading to HuggingFace** (so other machines auto-download from the loader):
   ```bash
   huggingface-cli upload AnsteinHuynh/Q-ReAlign-int8-convrot \
-      "I:/MyApps/ComfyUi/models/pyiqa/Q-ReAlign-Mini-0.8B-int8-convrot" \
+      <models>/pyiqa/Q-ReAlign-Mini-0.8B-int8-convrot \
       Q-ReAlign-Mini-0.8B-int8-convrot --repo-type model
   # repeat the last two arguments per variant (Lite-4B, Pro-9B)
   ```
