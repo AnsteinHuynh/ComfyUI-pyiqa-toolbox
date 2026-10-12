@@ -116,6 +116,15 @@ try:
             )
         return [p for p in paths if p and os.path.isdir(p)]
 
+    def _user_pyiqa_dirs():
+        """The user-facing model folders (install-local + extra_model_paths).
+
+        These are the ones the ``{architecture}/`` custom-checkpoint layout is
+        read from; pyiqa's own caches are deliberately excluded from it (their
+        loose weight files are pyiqa's defaults, not customs).
+        """
+        return [_LOCAL_PYIQA_DIR] + list(_EXTRA_SEARCH_PATHS)
+
     def _pyiqa_folder_paths():
         """Search paths in priority order: local, yaml, implicit caches.
 
@@ -142,6 +151,9 @@ try:
             pass
 
 except Exception:  # standalone use (smoke tests outside ComfyUI)
+
+    def _user_pyiqa_dirs():
+        return []
 
     def _pyiqa_folder_paths():
         return []
@@ -183,7 +195,17 @@ def find_pyiqa_model(name):
       setup, nothing is duplicated or re-downloaded). Incomplete snapshots are
       treated as absent so the loader keeps looking in later folders before
       falling back to the repo id and finishing the download.
+
+    The user-facing folders are additionally searched ONE LEVEL DOWN for the
+    ``<folder>/<Architecture>/<name>`` custom layout — a model moved into an
+    architecture folder must still be found, or the loader would re-download
+    gigabytes of weights that are already on disk.
     """
+    for folder in _user_pyiqa_dirs():
+        for arch_dir in sorted(glob.glob(os.path.join(folder, "*"))):
+            candidate = os.path.join(arch_dir, name)
+            if os.path.exists(candidate):
+                return candidate
     for folder in _pyiqa_folder_paths():
         candidate = os.path.join(folder, name)
         if os.path.exists(candidate):
@@ -195,90 +217,137 @@ def find_pyiqa_model(name):
     return None
 
 
-def list_pyiqa_checkpoints(
-    pattern="*.pth", require_config=False, exclude_paths=(), exclude_names=()
-):
-    """List custom checkpoints in the search ``pyiqa`` folders.
+# Custom-checkpoint containers.
+#
+# The extension only hints at the container, and the container is read by the
+# ARCH: pyiqa's ``pretrained_model_path`` is consumed inside each arch's own
+# __init__ — most call ``load_pretrained_network`` (torch.load, some of them
+# expecting a ``params`` key), the classic NR metrics read MATLAB ``.mat``
+# files, and AFINE expects a multi-key dict of its own. So the arch decides
+# what it can read; listing every plausible container and failing a wrong pick
+# with a clear message beats hiding files that would have worked.
+WEIGHT_EXTS = (".pth", ".pt", ".ckpt", ".bin", ".safetensors", ".mat")
+SAFETENSORS_EXT = ".safetensors"
+SNAPSHOT_MARKER = "config.json"
 
-    ``require_config=True`` returns snapshot-style *directories* (any subfolder
-    containing a config.json — HF-snapshot-like models such as custom
-    Q-ReAlign fine-tunes); otherwise returns *files* matching ``pattern``
-    (e.g. ``"FGResQ*.pth"``), as ``(label, full_path)`` pairs in folder order.
-    Family loaders use the family name as the pattern so each dropdown only
-    lists checkpoints named for that family.
 
-    ``exclude_paths`` drops entries resolving to one of the given paths (a
-    built-in that a broad search path already exposes, so the custom scan does
-    not list the same model twice); ``exclude_names`` drops entries by basename
-    (pyiqa's own default-family weight files, which are not customs). Both are
-    compared with ``os.path.normcase(os.path.abspath(...))``.
+def iter_user_pyiqa_dirs():
+    """(folder, entry_name, entry_path) for every entry of the user-facing
+    pyiqa folders — the ``{architecture}/`` layout's candidate folders."""
+    for folder in _user_pyiqa_dirs():
+        try:
+            names = sorted(os.listdir(folder))
+        except OSError:
+            continue
+        for name in names:
+            yield folder, name, os.path.join(folder, name)
+
+
+def list_weight_files(directory):
+    """[(label, path, kind)] for the weight files directly in ``directory``.
+
+    kind is ``"safetensors"`` (this pack reads it — pyiqa cannot) or
+    ``"checkpoint"`` (handed to pyiqa's own per-arch loader untouched).
     """
-    excluded_paths = {os.path.normcase(os.path.abspath(p)) for p in exclude_paths}
-    excluded_names = {os.path.normcase(n) for n in exclude_names}
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        return []
     found = []
-    for folder in _pyiqa_folder_paths():
-        if require_config:
-            try:
-                entries = sorted(os.listdir(folder))
-            except OSError:
-                continue
-            for name in entries:
-                candidate = os.path.join(folder, name)
-                if not os.path.isfile(os.path.join(candidate, "config.json")):
-                    continue
-                if os.path.normcase(os.path.abspath(candidate)) in excluded_paths:
-                    continue
-                if os.path.normcase(name) in excluded_names:
-                    continue
-                found.append((name, candidate))
-        else:
-            for path in sorted(glob.glob(os.path.join(folder, pattern))):
-                if os.path.normcase(os.path.abspath(path)) in excluded_paths:
-                    continue
-                label = os.path.basename(path)
-                if os.path.normcase(label) in excluded_names:
-                    continue
-                found.append((label, path))
+    for name in names:
+        path = os.path.join(directory, name)
+        if not os.path.isfile(path):
+            continue
+        ext = os.path.splitext(name)[1].lower()
+        if ext not in WEIGHT_EXTS:
+            continue
+        found.append(
+            (name, path, "safetensors" if ext == SAFETENSORS_EXT else "checkpoint")
+        )
     return found
 
 
-RESOLUTION_MODES = [
-    "auto (up to multiple of 32)",
-    "native",
-    "224",
-    "256",
-    "384",
-    "512",
-    "768",
-]
+def list_snapshot_dirs(directory):
+    """[(label, path)] for snapshot-style subfolders of ``directory``.
+
+    A snapshot model is a directory holding a ``config.json`` plus its weights
+    (the ``from_pretrained`` layout, e.g. HF downloads of Q-ReAlign builds).
+    """
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        return []
+    found = []
+    for name in names:
+        path = os.path.join(directory, name)
+        if os.path.isfile(os.path.join(path, SNAPSHOT_MARKER)):
+            found.append((name, path))
+    return found
 
 
-def apply_resolution(x, resolution):
-    """Smart resolution handling for arches with size requirements.
+def load_state_dict(path):
+    """Read a checkpoint's tensor dict from either container.
 
-    - "auto (up to multiple of 32)": bicubic-resize up to the next multiple of
-      32 per side — the graceful path AFINE's own forward intends (its padding
-      code is unreachable behind an assert that fires first). Never downsizes.
-    - "native": pass through untouched.
-    - "224".."768": bicubic resize to that exact square size.
+    torch formats go through ``torch.load`` exactly as pyiqa does;
+    ``.safetensors`` is read directly, because pyiqa's
+    ``load_pretrained_network`` is torch.load-only and raises on one.
+    """
+    if path.lower().endswith(SAFETENSORS_EXT):
+        from safetensors.torch import load_file
+
+        return load_file(path)
+    return torch.load(path, map_location="cpu", weights_only=False)
+
+
+# Input adaptation ("auto"): what a model needs done to its images before
+# scoring. A per-architecture policy tuple (see metric_catalog._ARCH_RULES and
+# Architecture.policy) rather than a user choice — every requirement here is a
+# property of the model, and the sizes a user could previously type (224/384/...)
+# were the one option that could disagree with the model's own preprocessing.
+POLICY_MULT32 = ("mult32",)
+
+
+def _to_multiple_of_32(x):
+    import torch.nn.functional as F
+
+    _, _, h, w = x.shape
+    pad_h = (32 - h % 32) % 32
+    pad_w = (32 - w % 32) % 32
+    if pad_h or pad_w:
+        x = F.interpolate(
+            x, size=(h + pad_h, w + pad_w), mode="bicubic", align_corners=False
+        )
+    return x.clamp_(0, 1)
+
+
+def prepare_image(x, policy=()):
+    """Adapt one image batch to the loaded model's requirements."""
+    if "mult32" in policy:
+        x = _to_multiple_of_32(x)
+    return x
+
+
+def prepare_pair(x, y, policy=()):
+    """Adapt a (target, reference) pair to the loaded model's requirements.
+
+    Full-reference metrics compare the two images pixel-wise, so a pair of
+    different sizes is resized to the target's geometry — the target is the
+    image being judged, its framing is the one that must not move.
     """
     import torch.nn.functional as F
 
-    if resolution == "native":
-        return x
-    if resolution.startswith("auto"):
-        _, _, h, w = x.shape
-        pad_h = (32 - h % 32) % 32
-        pad_w = (32 - w % 32) % 32
-        if pad_h or pad_w:
-            x = F.interpolate(
-                x, size=(h + pad_h, w + pad_w), mode="bicubic", align_corners=False
-            )
-        return x.clamp_(0, 1)
-    size = int(resolution)
-    if x.shape[2] != size or x.shape[3] != size:
-        x = F.interpolate(x, size=(size, size), mode="bicubic", align_corners=False)
-    return x.clamp_(0, 1)
+    x = prepare_image(x, policy)
+    y = prepare_image(y, policy)
+    if x.shape[2:] != y.shape[2:]:
+        logger.info(
+            "(pyiqa-toolbox) reference %s resized to the target's %s "
+            "(full-reference metrics compare pixel-wise)",
+            tuple(y.shape[2:]),
+            tuple(x.shape[2:]),
+        )
+        y = F.interpolate(y, size=x.shape[2:], mode="bicubic", align_corners=False)
+        y = y.clamp_(0, 1)
+    return x, y
 
 
 def default_device():
@@ -384,12 +453,41 @@ def revive_metric(model):
     )
 
 
-def _gut(target):
-    """Replace every parameter and buffer with empty meta tensors, in place.
+def _wrapper_chain(metric):
+    """``metric`` and every ``.metric`` it wraps, outermost first.
 
-    The object stays alive for anyone still referencing it (ComfyUI's output
-    cache), but holds no VRAM and no RAM - only the recipe to rebuild it.
+    A loaded metric is a chain: the generic loader's ``MetricBundle`` around a
+    family bundle (FGResQ's shared net) around pyiqa's ``InferenceModel``. The
+    walk stops at the first object that can be gutted - one exposing
+    ``named_modules``, either because it IS an ``nn.Module`` or because it
+    forwards to one (a ``MetricBundle`` around a plain pyiqa metric forwards, so
+    that chain is one object long; FGResQ's bundle does not, so its chain has all
+    three levels). That object is also the only one holding memory.
     """
+    chain = []
+    seen = set()
+    obj = metric
+    while obj is not None and id(obj) not in seen:
+        chain.append(obj)
+        seen.add(id(obj))
+        if callable(getattr(obj, "named_modules", None)):
+            break
+        obj = getattr(obj, "metric", None)
+    return chain
+
+
+def _gut(metric):
+    """Release the weights behind ``metric``, in place.
+
+    Only the innermost object in the wrapper chain owns modules, so that is what
+    is emptied: every parameter becomes an empty meta tensor and every buffer
+    becomes ``None``. The shells stay alive for anyone still referencing them
+    (ComfyUI's output cache) but hold no VRAM and no RAM.
+    """
+    chain = _wrapper_chain(metric)
+    target = chain[-1] if chain else None
+    if not callable(getattr(target, "named_modules", None)):
+        raise TypeError(f"{type(metric).__name__} wraps no module to unload")
     for _, module in target.named_modules():
         for attr in list(module._parameters):
             module._parameters[attr] = torch.nn.Parameter(
@@ -397,37 +495,52 @@ def _gut(target):
             )
         for attr in list(module._buffers):
             module._buffers[attr] = None
-    target._pyiqa_gutted = True
+
+
+def _mark_chain(chain):
+    """Tombstone every wrapper in ``chain`` and stamp each one's own recipe.
+
+    EVERY level needs both marks, not just the innermost object: ComfyUI's output
+    cache can hand any of them to the next score node, and a shell without
+    ``_pyiqa_gutted`` is used as-is instead of being revived (that was a real
+    crash - after Edit > Unload Models, FGResQ's shared pair net reached a score
+    node hollowed out, ``self.default_mean is None``). The recipe is per object
+    because two cache entries can hold two different wrappers of ONE net, and a
+    revived shell has to find the entry that would rebuild the thing it is.
+    """
+    for obj in chain:
+        obj._pyiqa_gutted = True
+        if getattr(obj, "_pyiqa_recipe", None) is None:
+            for key, (_family, m, _factory) in _METRIC_CACHE.items():
+                if m is obj:
+                    obj._pyiqa_recipe = key
+                    break
 
 
 def drop_metric(metric):
     """Fully unload one metric: gone from VRAM and from system RAM.
 
     The weights are gutted in place (so references held by ComfyUI's output
-    cache cost nothing), the cache entry becomes a rebuild tombstone, and the
-    CUDA cache is flushed. The next score reloads from disk.
+    cache cost nothing), every wrapper becomes a rebuild tombstone, and the CUDA
+    cache is flushed. The next score reloads from disk.
     """
     if metric is None:
         return False
-    target = (
-        metric if isinstance(metric, torch.nn.Module) else getattr(metric, "metric", metric)
-    )
-    already = getattr(metric, "_pyiqa_gutted", False) or getattr(
-        target, "_pyiqa_gutted", False
-    )
-    if not already:
+    chain = _wrapper_chain(metric)
+    unloaded = False
+    if not any(getattr(obj, "_pyiqa_gutted", False) for obj in chain):
         try:
-            _gut(target)
+            _gut(metric)
         except Exception as exc:  # never break a score over cleanup
             logger.debug("drop_metric gut failed: %s", exc)
             return False
-        metric._pyiqa_gutted = True
-        # stamp the recipe so later references to THIS shell can find the
-        # cache entry even after other revivals replaced the entry's metric
-        for key, (_family, m, _factory) in _METRIC_CACHE.items():
-            if m is metric:
-                metric._pyiqa_recipe = key
-                break
+        unloaded = True
+    # the net may already have been gutted through another cache entry that
+    # wraps the same weights (FGResQ's bundle is cached under its family key AND
+    # wrapped by the generic loader), so this runs even then: the wrapper in
+    # front of us still has to be revivable
+    _mark_chain(chain)
+    if unloaded:
         logger.info(
             "(pyiqa-toolbox) metric fully unloaded (VRAM + RAM freed; "
             "reloads from disk on the next score)"
@@ -466,7 +579,7 @@ def _device_matches(real, target):
     return real.index == target.index
 
 
-def offload_metric_cache():
+def unload_metric_cache():
     """React to ComfyUI's Edit > Unload Models: release every cached metric.
 
     The pack has no CPU-parking path (it proved buggy: pyiqa keeps plain
@@ -485,7 +598,7 @@ def evict_metric_cache(fully=True):
     fully is kept for call-signature compatibility; there is only one release
     semantic now (full unload - VRAM and RAM).
     """
-    offload_metric_cache()
+    unload_metric_cache()
 
 
 def ensure_on_device(metric, device=None):
