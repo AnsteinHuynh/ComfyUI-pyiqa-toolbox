@@ -1,5 +1,22 @@
 # ComfyUI-pyiqa-toolbox
 
+Hello~! 
+
+Ever wanted a way to tell if one picture is better over another?
+
+PYIQA is the answer!
+
+I've created durable, reliable nodes which uses the PYIQA engine, which you can use to give you ratings, so you don't have to strain your eyes trying to see if picture 1 is better over picture 2.
+
+I personally would recommend in no particular order: TOPIQ, FGResQ, AFINE, LPIPS Plus VGG, FSIM, and if you have the computing power - Q-ReAlign pro
+
+I've also quantized [Q-ReAlign](https://huggingface.co/ansteinhuynh/Q-ReAlign-int8-convrot) so that the mini/lite/pro are more VRAM and compute efficient 
+
+===
+
+[The following is written by AI]
+
+===
 ComfyUI nodes wrapping [pyiqa (IQA-PyTorch)](https://github.com/chaofengc/IQA-PyTorch)
 quality metrics. Every score is produced by the metric object pyiqa itself
 builds (`pyiqa.create_metric`) — the nodes only convert ComfyUI's image format
