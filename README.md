@@ -17,6 +17,7 @@ I've also quantized [Q-ReAlign](https://huggingface.co/ansteinhuynh/Q-ReAlign-in
 [The following is written by AI]
 
 ===
+
 ComfyUI nodes wrapping [pyiqa (IQA-PyTorch)](https://github.com/chaofengc/IQA-PyTorch)
 quality metrics. Every score is produced by the metric object pyiqa itself
 builds (`pyiqa.create_metric`) — the nodes only convert ComfyUI's image format
