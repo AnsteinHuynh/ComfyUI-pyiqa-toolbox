@@ -1,5 +1,9 @@
 # ComfyUI-pyiqa-toolbox
 
+<p align="center">
+  <img width="100%" alt="pyiqa-toolbox: an AI judge node comparing a sharp photo of an alpine lake against a degraded copy of the same scene, five gold stars versus one red star" src="https://raw.githubusercontent.com/AnsteinHuynh/ComfyUI-pyiqa-toolbox/main/assets/pyiqa-toolbox-banner.jpg">
+</p>
+
 Hello~!
 
 Ever wanted a way to tell if one picture is better than another? Or whether a batch of images beats this other, slightly different batch?
