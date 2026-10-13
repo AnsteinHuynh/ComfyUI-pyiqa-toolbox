@@ -10,13 +10,13 @@ I've created durable, reliable nodes which uses the PYIQA engine, which you can 
 
 I personally would recommend in no particular order: TOPIQ, FGResQ, AFINE, LPIPS Plus VGG, FSIM, and if you have the computing power - Q-ReAlign pro
 
+My recommendations are from on my personal experiences with my own blind A/B tests, my personal benchmarks, as well as their performance on [pyiqa's benchmarks](https://github.com/chaofengc/IQA-PyTorch/tree/main?tab=readme-ov-file#performance-evaluation-protocol)
+
 I've also quantized [Q-ReAlign](https://huggingface.co/ansteinhuynh/Q-ReAlign-int8-convrot) so that the mini/lite/pro are more VRAM and compute efficient 
 
 ===
 
-[The following is written by AI]
-
-===
+[The sections below are written by AI]
 
 ComfyUI nodes wrapping [pyiqa (IQA-PyTorch)](https://github.com/chaofengc/IQA-PyTorch)
 quality metrics. Every score is produced by the metric object pyiqa itself
