@@ -2,7 +2,7 @@
 
 Hello~! 
 
-Ever wanted a way to tell if one picture is better over another?
+Ever wanted a way to tell if one picture is better over another? Or if a batch of images is better over this other slightly different batch?
 
 PYIQA is the answer!
 
