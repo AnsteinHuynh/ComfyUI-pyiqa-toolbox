@@ -2,7 +2,7 @@
 
 Every metric this pack can score with - through `(Down)load pyiqa Model`, or through a dedicated loader where one exists - what it actually is, and which way its number points. Generated from the pack's own catalog by `tools/gen_metrics_doc.py`, so it always matches the code.
 
-This file describes pack 0.2.1 and pyiqa 0.1.15.post28: 100 weights choices you can score per image, across 50 architectures (32 full-reference, 68 no-reference), plus 5 set-level or text-conditioned metrics. Your own checkpoints add more entries at runtime (see *Custom checkpoints* in the README).
+This file describes pack 0.2.0 and pyiqa 0.1.15.post28: 100 weights choices you can score per image, across 50 architectures (32 full-reference, 68 no-reference), plus 5 set-level or text-conditioned metrics. Your own checkpoints add more entries at runtime (see *Custom checkpoints* in the README).
 
 pyiqa also registers `qrealign-mini` (same weights as `qrealign`), so it is folded into that entry rather than offered twice.
 

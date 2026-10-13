@@ -550,7 +550,7 @@ runs first, so nothing else about that menu item changes.
   `transformers>=5.0` — deliberately **not** in requirements.txt (forcing that
   upgrade on every install can break other packs); the QReAlign Loader checks
   the version at load time and raises with the exact pip command to fix it.
-- Startup logs one line — `(pyiqa-toolbox) v0.2.1 | pyiqa 0.1.15.post28 |
+- Startup logs one line — `(pyiqa-toolbox) v0.2.0 | pyiqa 0.1.15.post28 |
   transformers 5.15.0 | torch 2.12.1+cu130 | 53 architectures, 103 variants` — so
   any bug report
   says which versions were running. The pack version is read from

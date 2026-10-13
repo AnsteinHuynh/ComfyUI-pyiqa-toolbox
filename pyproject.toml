@@ -4,7 +4,7 @@
 # "pyiqa-toolbox" while the GitHub repository keeps its ComfyUI- name.
 name = "pyiqa-toolbox"
 description = "ComfyUI nodes wrapping pyiqa (IQA-PyTorch) quality metrics: one loader over the whole registry, generic FR/NR score nodes, plus dedicated nodes for Q-ReAlign, FGResQ, FID and CLIP Score."
-version = "0.2.1"
+version = "0.2.0"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
