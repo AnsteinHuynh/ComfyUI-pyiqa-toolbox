@@ -1,36 +1,36 @@
 # ComfyUI-pyiqa-toolbox
 
-Hello~! 
+Hello~!
 
-Ever wanted a way to tell if one picture is better over another? Or if a batch of images is better over this other slightly different batch?
+Ever wanted a way to tell if one picture is better than another? Or whether a batch of images beats this other, slightly different batch?
 
-PYIQA is the answer!
+pyiqa is the answer! I've built durable, reliable nodes around it, so you get ratings instead of having to strain your eyes comparing picture 1 with picture 2.
 
-I've created durable, reliable nodes which uses the PYIQA engine, which you can use to give you ratings, so you don't have to strain your eyes trying to see if picture 1 is better over picture 2.
+There are 2 ways of rating a picture:
 
-I personally would recommend in no particular order: TOPIQ, FGResQ, AFINE, LPIPS Plus VGG, FSIM, and if you have the computing power - Q-ReAlign pro
+1. NR (No-Reference): You give a judge just one picture, and they give a score. The judge doesn't know anything else other than that one picture.
 
-My recommendations are from on my personal experiences with my own blind A/B tests, my personal benchmarks, as well as their performance on [pyiqa's benchmarks](https://github.com/chaofengc/IQA-PyTorch/tree/main?tab=readme-ov-file#performance-evaluation-protocol)
+2. FR (Full-Reference): you hand the judge two pictures; the one being judged, and the original to compare it against.
 
-I've also quantized [Q-ReAlign](https://huggingface.co/ansteinhuynh/Q-ReAlign-int8-convrot) so that the mini/lite/pro are more VRAM and compute efficient 
+Different judges care about different things: one might rate the picture quality, another the aesthetics.
 
-===
+![Two pyiqa-toolbox node pairs: the top pair is (Down)load pyiqa Model with architecture LAION Aesthetic and variant "NR, higher better, ~1-10" feeding pyiqa NR Score; the bottom pair is (Down)load pyiqa Model with architecture MS-SWD (learned) and variant "FR, lower better, 0-~10" feeding pyiqa FR Score, whose target and reference inputs each take an image](https://raw.githubusercontent.com/AnsteinHuynh/ComfyUI-pyiqa-toolbox/main/assets/pyiqa-toolbox-nr-and-fr-score-nodes.png)
 
-[The sections below are written by AI]
+I've made these nodes easy to use (just a loader and a score node!), while also staying compatible as pyiqa adds new architectures. You can see which way is better, and what range to expect, just from the labels.
 
-ComfyUI nodes wrapping [pyiqa (IQA-PyTorch)](https://github.com/chaofengc/IQA-PyTorch)
-quality metrics. Every score is produced by the metric object pyiqa itself
-builds (`pyiqa.create_metric`) — the nodes only convert ComfyUI's image format
-and format the outputs, so results match the library exactly.
+My recommendations, in no particular order: **TOPIQ (CFANet)**, **FGResQ**, **A-FINE**, **LPIPS+ (VGG, semantic weighting)**, **FSIM**, and - if you have the compute - **Q-ReAlign Pro 9B**. Those are the names as they appear in the loader's dropdowns.
 
-Pattern: **one loader over pyiqa's whole registry, one pair of score nodes, and a
-node of their own only for the four things that are not "one image in, one float
-out"** (FGResQ's pair API, Q-ReAlign's int8/snapshot builds and task switch,
-FID's set-level folder scoring, CLIP Score's caption). A model is loaded once and
-shared, re-queues reuse it, and Edit > Unload Models unloads it — see Memory
-management. A new pyiqa metric, or a whole new architecture, needs no change
-here: it appears in the loader's dropdowns with its mode, direction and score
-range read from pyiqa's own table.
+They come from my own blind A/B tests and personal benchmarks, plus their standing on [pyiqa's benchmark tables](https://github.com/chaofengc/IQA-PyTorch/tree/main?tab=readme-ov-file#performance-evaluation-protocol).
+
+I've also quantized [Q-ReAlign](https://huggingface.co/ansteinhuynh/Q-ReAlign-int8-convrot) so mini/lite/pro are cheaper in VRAM and compute (Pro 9B: 17.5 → 11.55 GiB).
+
+The quickest way to see a score: Install and then use two ready-made workflows that ship with the pack - **Workflow → Browse Templates → ComfyUI-pyiqa-toolbox**.
+
+---
+
+Every score is produced by the metric object pyiqa itself builds
+(`pyiqa.create_metric`) — the nodes only convert ComfyUI's image format and
+format the outputs, so results match the library exactly.
 
 ## Install
 
@@ -46,7 +46,7 @@ python -m pip install -r ComfyUI-pyiqa-toolbox/requirements.txt
 Restart ComfyUI; the ten nodes appear under the `pyiqa` category. Existing
 workflows keep working across display-name changes (a workflow stores node class
 keys, not labels), but this revision does remove three nodes — see *Breaking
-changes* below before re-running an older graph.
+changes* in **Nodes** below before re-running an older graph.
 
 **What the install pulls in.** The pack pins only `pyiqa`; pyiqa's own metadata
 then requires `torch`, `torchvision`, `transformers>=5.0`, `accelerate`,
@@ -96,9 +96,11 @@ keep nodes of their own, because they are not "one image in, one float out":
 FGResQ (its NR model and its pair API share one architecture, and the pair call
 returns four values), Q-ReAlign (int8/snapshot builds, and a scoring task that is
 not a weight choice), FID (set-level, folder-based) and CLIP Score (needs a
-caption - the one input no generic score node can ask for). What a per-metric
-node used to tell you — direction, range, order behaviour — is in the variant
-label and in this table:
+caption - the one input no generic score node can ask for). A new pyiqa metric,
+or a whole new architecture, needs no change here: it appears in the loader's
+dropdowns with the mode, direction and range pyiqa's own table declares. What a
+per-metric node used to tell you — direction, range, order behaviour — is in the
+variant label and in this table:
 
 | You want | Pick architecture | Mode / direction / range | Order |
 |---|---|---|---|
@@ -149,8 +151,8 @@ one display name:
   Model` → `(Down)load pyiqa Model`). Display-name only: saved workflows keep
   working, since a workflow stores the node's class key and its input names, not
   the label.
-- **`Load FID` / `Load FGResQ` / `L1 Score` workflows** need those nodes
-  re-picked (see above). Everything else in an existing workflow still runs.
+- Everything else in an existing workflow still runs - a saved graph only needs
+  the removed nodes re-picked.
 - Also: pyiqa registers `qrealign-mini` as a second name for the same weights as
   `qrealign`; the duplicate is now folded away (one entry, not two), and the
   Q-ReAlign / Inception Score architectures are listed as **signposts** — one
@@ -354,10 +356,10 @@ wire before the score nodes or at the end of a pipeline. It touches only this
 pack's metrics — ComfyUI's own models are left to ComfyUI, and Edit > Unload
 Models does the same full unload for ours.
 
-**Resolution is automatic (A-FINE):** AFINE asserts sides divisible by 32 (CLIP
+**Resolution is automatic (A-FINE):** A-FINE asserts sides divisible by 32 (CLIP
 ViT-B/32 patches). The score nodes resize up to the next multiple — the graceful
-handling AFINE's own forward intends but cannot reach — with the overshoot
-clamped back to [0,1]. AFINE is also scored one image at a time internally: its
+handling A-FINE's own forward intends but cannot reach — with the overshoot
+clamped back to [0,1]. A-FINE is also scored one image at a time internally: its
 forward's squeeze/unsqueeze assume batch size 1 and corrupt larger batches.
 Both facts are applied without a widget (see *No resolution input anywhere*).
 
@@ -603,3 +605,11 @@ archive (see `.comfyignore`): clone the repository to run the smoke suite,
 `calibra_check.py` or the int8 tooling. Their machine-specific paths come from
 `PYIQA_TOOLBOX_ROOT`/`_COMFY`/`_MODELS`/`_IMAGES`/`_HF_CACHE`, or from
 `tools/dev_paths_local.py` (gitignored) - never from the committed code.
+
+## About this document
+
+The introduction at the top is my own writing. The reference sections that follow
+it were drafted with AI assistance and reviewed by me - and the technical claims
+are not taken on trust: `tools/smoke_test.py` fails if the documented surface
+drifts from the code, and `METRICS.md` is generated from the pack's own catalog,
+so labels, directions, ranges and registry names cannot go stale.
