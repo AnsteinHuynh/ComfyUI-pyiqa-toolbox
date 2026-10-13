@@ -11,7 +11,9 @@ import logging
 import os
 import sys
 
+import numpy as np
 import torch
+from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # dev_paths sibling
 import dev_paths  # noqa: E402
@@ -31,12 +33,9 @@ DEV = "cuda"
 
 def load_image_tensor():
     cands = dev_paths.image_paths()
-    from PIL import Image
-
     img = Image.open(cands[0]).convert("RGB").resize((512, 512))
-    t = torch.from_numpy(
-        __import__("numpy").asarray(img)
-    ).permute(2, 0, 1).unsqueeze(0).float() / 255.0
+    arr = np.asarray(img)
+    t = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).float() / 255.0
     return t.to(DEV), cands[0]
 
 
