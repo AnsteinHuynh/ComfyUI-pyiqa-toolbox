@@ -573,7 +573,11 @@ runs first, so nothing else about that menu item changes.
 per-architecture rule table), `web/js/` (client extension: the generic loader's
 dependent variant combo; exported via `WEB_DIRECTORY`), `tools/` (smoke test,
 calibration checks, and `gen_metrics_doc.py`, which writes `METRICS.md`),
-`example_workflows/` (reserved for exported workflow templates - empty for now).
+`example_workflows/` (two runnable templates, picked up by ComfyUI's template
+browser: `pyiqa-example-FR-workflow.json` compares a target against a reference
+with LPIPS+ and FGResQ FR, `pyiqa-example-NR-workflow.json` scores a batch with
+A-FINE, FGResQ NR and Q-ReAlign aesthetic; both need only core ComfyUI and this
+pack).
 Deployed to ComfyUI via directory junctions into each install's `custom_nodes`.
 
 `tools/` is development-only and is **not** part of the published registry
