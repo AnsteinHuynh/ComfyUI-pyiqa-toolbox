@@ -1,6 +1,6 @@
 # ComfyUI-pyiqa-toolbox
 
-ComfyUI nodes wrapping [pyiqa (IQA-PyTorch)](https://github.com/chaofengc/IQA-Pytorch)
+ComfyUI nodes wrapping [pyiqa (IQA-PyTorch)](https://github.com/chaofengc/IQA-PyTorch)
 quality metrics. Every score is produced by the metric object pyiqa itself
 builds (`pyiqa.create_metric`) — the nodes only convert ComfyUI's image format
 and format the outputs, so results match the library exactly.
