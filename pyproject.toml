@@ -36,7 +36,11 @@ Repository = "https://github.com/AnsteinHuynh/ComfyUI-pyiqa-toolbox"
 "Bug Tracker" = "https://github.com/AnsteinHuynh/ComfyUI-pyiqa-toolbox/issues"
 
 [tool.comfy]
-# PublisherId must match the registry account exactly (immutable, used in URLs);
-# confirm it on registry.comfy.org before the first publish.
-PublisherId = "AnsteinHuynh"
+# PublisherId is the registry's *publisher id*, not the profile name. The account
+# displays as "AnsteinHuynh" but its id - the string after the @ on the profile
+# page, and the one in every registry URL - is lowercase "ansteinhuynh". The
+# registry matches it exactly (GET /publishers/AnsteinHuynh is a 404, and posting
+# a version under it fails with "Failed to validate token"), and comfy-cli uses
+# this value verbatim in the URL. Immutable after the first publish.
+PublisherId = "ansteinhuynh"
 DisplayName = "pyiqa-toolbox"
