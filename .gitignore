@@ -27,3 +27,7 @@ comfyui-documentation.md
 venv/
 .idea/
 .vscode/
+
+# Left behind by `comfy node publish` in the repo root (the archive it uploads;
+# the registry keeps its own copy of it)
+node.zip
