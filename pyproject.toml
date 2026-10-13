@@ -44,3 +44,8 @@ Repository = "https://github.com/AnsteinHuynh/ComfyUI-pyiqa-toolbox"
 # this value verbatim in the URL. Immutable after the first publish.
 PublisherId = "ansteinhuynh"
 DisplayName = "pyiqa-toolbox"
+# Banner: 2016x864 (exact 21:9, the spec's ratio). Committed under assets/ and
+# referenced by absolute URL, so the registry stores only the string and GitHub
+# serves the bytes. Publish-time metadata: the listing keeps the previous banner
+# until the next version is published.
+Banner = "https://raw.githubusercontent.com/AnsteinHuynh/ComfyUI-pyiqa-toolbox/main/assets/pyiqa-toolbox-banner.jpg"
