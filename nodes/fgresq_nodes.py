@@ -362,11 +362,11 @@ class FGResQPairScore(ModelValidationMixin, LazyScoreMixin):
         "quality0, the x0 side. 0-1, higher is better.",
         "FGResQ quality for the REFERENCE image - the pristine original it is "
         "compared against: pyiqa's quality1, the x1 side. 0-1, higher is better.",
-        "Pairwise verdict as pyiqa's integer code: 0 = reference is better, "
+        "Pairwise rank as pyiqa's integer code: 0 = reference is better, "
         "1 = target is better, 2 = similar. (pyiqa names these image2/image1 "
         "because it sees x0=first argument, x1=second.)",
-        "The rank as words: 'target_better' (your produced/distorted image won) / "
-        "'reference_better' (the pristine original won) / 'similar'.",
+        "The same rank as words: 'target_better' (your produced/distorted image "
+        "won) / 'reference_better' (the pristine original won) / 'similar'.",
         "Confidence of the rank verdict: the softmax probability of the chosen "
         "class (0-1).",
     )
@@ -386,8 +386,8 @@ class FGResQPairScore(ModelValidationMixin, LazyScoreMixin):
         if not callable(pair):
             raise ValueError(
                 "FGResQ FR Score needs the FGResQ model: the pair verdict comes "
-                "from the arch loaded by (Down)load FGResQ or by Load pyiqa "
-                "Model with an FGResQ variant."
+                "from the arch loaded by (Down)load pyiqa Model with an FGResQ "
+                "variant (either FGResQ entry - both load the same net)."
             )
         dev = ensure_on_device(model, default_device())
         x0 = comfy_image_to_pyiqa(target, dev)
