@@ -216,7 +216,9 @@ and size-mismatched pairs are harmonized for pixel-wise metrics; batch-1
 architectures (A-FINE, Compare2Score, Q-Align, the TOPIQ face heads) are scored
 one image at a time automatically, and the FR nodes size the reference to the
 target's geometry before chunking. There is nothing to tune, and nothing that
-silently pads a metric's input.
+silently pads a metric's input. An image with an alpha channel (e.g. from Qwen
+Image's RGBA output) is scored on its RGB channels — pyiqa takes 1-or-3-channel
+input only, so the alpha is dropped before scoring.
 
 **Order sensitivity in the table above is MEASURED**, not assumed: each FR
 metric was scored as f(a,b) vs f(b,a) on identical inputs. Order-sensitive:
@@ -554,7 +556,7 @@ runs first, so nothing else about that menu item changes.
   `transformers>=5.0` — deliberately **not** in requirements.txt (forcing that
   upgrade on every install can break other packs); the QReAlign Loader checks
   the version at load time and raises with the exact pip command to fix it.
-- Startup logs one line — `(pyiqa-toolbox) v0.2.0 | pyiqa 0.1.15.post28 |
+- Startup logs one line — `(pyiqa-toolbox) v0.2.1 | pyiqa 0.1.15.post28 |
   transformers 5.15.0 | torch 2.12.1+cu130 | 53 architectures, 103 variants` — so
   any bug report
   says which versions were running. The pack version is read from

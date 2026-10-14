@@ -367,7 +367,17 @@ def comfy_image_to_pyiqa(image, device):
     pyiqa's InferenceModel asserts 4D input in [0, 1]; it applies each metric's
     own preprocess internally (FGResQ: resize 256 -> crop 224 -> CLIP norm;
     QReAlign: its Qwen3.5-VL processor), so we only move axes/dtype/device.
+
+    An alpha channel is dropped (RGB kept as-is, like PIL's ``convert('RGB')``):
+    pyiqa asserts 1 or 3 channels, and RGBA tensors do reach the sockets (e.g.
+    Qwen Image 2.1's decoder emits a 4-channel latent-to-image).
     """
+    if image.shape[-1] == 4:
+        logger.info(
+            "(pyiqa-toolbox) input image has an alpha channel; scoring the RGB "
+            "channels only"
+        )
+        image = image[..., :3]
     return (
         image.permute(0, 3, 1, 2)
         .contiguous()

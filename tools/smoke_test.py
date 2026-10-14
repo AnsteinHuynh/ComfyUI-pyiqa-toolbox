@@ -370,6 +370,21 @@ def main():
     finally:
         metric_catalog._CONFIGS, metric_catalog.REGISTRY_ERROR = saved_configs, saved_error
 
+    print("\n-- Step 2: an alpha channel in the input tensor is dropped --")
+    # pyiqa asserts 1-or-3-channel input, and RGBA tensors do reach the image
+    # sockets (Qwen Image 2.1's decoder emits a 4-channel image). The conversion
+    # every score node shares must score the RGB channels instead of crashing
+    # (regression: first user-reported bug, 2026-10-13).
+    rgba = torch.rand(2, 8, 8, 4)
+    conv = utils.comfy_image_to_pyiqa(rgba, torch.device("cpu"))
+    assert conv.shape == (2, 3, 8, 8), conv.shape
+    torch.testing.assert_close(conv, rgba[..., :3].permute(0, 3, 1, 2))
+    rgb = utils.comfy_image_to_pyiqa(torch.rand(1, 8, 8, 3), torch.device("cpu"))
+    assert rgb.shape == (1, 3, 8, 8), rgb.shape
+    gray = utils.comfy_image_to_pyiqa(torch.rand(1, 8, 8, 1), torch.device("cpu"))
+    assert gray.shape == (1, 1, 8, 8), gray.shape
+    print("4-channel tensors score their RGB channels; RGB and gray pass through")
+
     _expect_value_error(
         lambda: pack.NODE_CLASS_MAPPINGS["PyiqaAnyNRScore"]()._require_compatible(
             common.MetricBundle(metric_catalog.resolve("SSIM"), lambda x: x, "classic_fr")
@@ -408,7 +423,7 @@ def main():
     assert pyproject_version in line and "pyiqa" in line, captured
     print("startup line:", line)
 
-    print("\n-- Step 2: the 10-node surface; refusal messages name survivors --")
+    print("\n-- Step 3: the 10-node surface; refusal messages name survivors --")
     # No weights are loaded: the accept/refuse matrix drives the guard (which
     # runs before any model work) with bundles built from the catalog, so this
     # whole section is milliseconds and cannot be the reason the suite is slow.
@@ -820,7 +835,7 @@ def main():
     print("  score(): 2 images + 1 caption -> one call with the caption twice; "
           "2 captions -> paired per image (no downloads)")
 
-    print("\n-- Step 3: one rule table per architecture; the Q-Align gate --")
+    print("\n-- Step 4: one rule table per architecture; the Q-Align gate --")
     # Nothing is downloaded: the gate is exercised as a function, and the
     # build_metric hook is proven with a temporary sentinel builder for an
     # architecture that costs nothing to "build".
